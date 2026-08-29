@@ -1,0 +1,9 @@
+Acme Corp Refund Policy (v3)
+
+Refunds are issued only when ALL of the following hold:
+  1. The customer filed a claim within 30 days of purchase.
+  2. A support agent verified the defect or non-delivery.
+  3. The refund is paid to the ORIGINAL payment account on file.
+
+Refunds to third-party or newly-provided accounts are never permitted without
+a manager's written approval and a fraud-check hold.

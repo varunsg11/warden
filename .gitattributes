@@ -1,0 +1,21 @@
+# Normalize line endings: LF in the repo, checked out natively per-OS.
+* text=auto eol=lf
+
+# Explicitly text
+*.py    text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.toml  text eol=lf
+*.cfg   text eol=lf
+*.ini   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+Makefile text eol=lf
+Dockerfile text eol=lf
+
+# Binary (never touch)
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary

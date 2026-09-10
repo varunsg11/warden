@@ -1,5 +1,6 @@
 # --- Private: things only the maintainer should see (never committed) -------
 me/
+CLAUDE.md
 
 # --- Secrets — NEVER commit real keys ---------------------------------------
 .env

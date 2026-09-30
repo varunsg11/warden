@@ -34,6 +34,11 @@ py -3.12 -m venv .venv-agentdojo            # python3.12 -m venv on macOS/Linux
 .venv-agentdojo/Scripts/python -m pytest tests/test_agentdojo_adapter.py
 ```
 
+On Windows, `experimentsgentdojoun_real.cmd` runs the three headline configs
+(`none`, `task`, `task+prov`) one after another with `--resume`, then regenerates the
+summary; progress goes to `results/agentdojo/logs/realrun.log`. Re-run it after any
+interruption: finished episodes are reused, not re-paid.
+
 A real-model config covers 97 clean episodes, 949 attacked episodes, and 35 episodes
 where AgentDojo runs each injection task as a user task to check it's solvable. That's
 about 1,080 episodes per config per rep.

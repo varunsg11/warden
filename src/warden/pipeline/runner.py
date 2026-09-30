@@ -28,6 +28,7 @@ from warden.governance.audit import AuditLog
 from warden.governance.capability import Capability
 from warden.governance.drift import DriftDetector, DriftViolation
 from warden.governance.gate import Decision, Gate, GateViolation
+from warden.governance.provenance import Provenance
 from warden.llm import ToolCall
 from warden.pipeline.tools import TOOL_IMPLS, TOOL_SCOPES, TOOL_SPECS
 
@@ -54,6 +55,10 @@ class GatedToolRunner:
 
     With `quarantine_on_deny` (the default), the first violation quarantines the
     session: every later call is denied, however harmless it looks.
+
+    `provenance` records where the session's text came from; the runner adds
+    every tool output to it as untrusted (`observe`). The caller adds the trusted
+    inputs (the user's request) before the first call.
     """
 
     def __init__(
@@ -67,6 +72,7 @@ class GatedToolRunner:
         schemas: Mapping[str, dict[str, Any]] | None = None,
         impls: Mapping[str, Callable[..., str]] | None = None,
         quarantine_on_deny: bool = True,
+        provenance: Provenance | None = None,
     ) -> None:
         self._gate = gate
         self._manifests = manifests
@@ -79,6 +85,7 @@ class GatedToolRunner:
         )
         self._impls = TOOL_IMPLS if impls is None else impls
         self._quarantine_on_deny = quarantine_on_deny
+        self.provenance = provenance
         self.audit = audit
         self.decisions: list[Decision] = []
         self.quarantined = False
@@ -107,6 +114,7 @@ class GatedToolRunner:
             required_scope=self._scopes.get(call.name, ""),
             manifest=self._manifests.get(role, []),
             arg_schema=self._schemas.get(call.name),
+            provenance=self.provenance,
         )
         self.decisions.append(decision)
         self._record(
@@ -142,7 +150,14 @@ class GatedToolRunner:
         self.authorize(role, call)
         result = self._impls[call.name](**call.arguments)
         self._record("tool_executed", role=role, tool=call.name, result=result)
+        self.observe(call.name, result)
         return result
+
+    def observe(self, tool: str, output: str) -> None:
+        """Record a tool's output as untrusted text. Integrations that execute
+        tools themselves must call this with every output."""
+        if self.provenance is not None:
+            self.provenance.add_untrusted(output, source=f"output of {tool}")
 
     def _quarantine(self, role: str, tool: str, reason: str) -> None:
         if self._quarantine_on_deny:

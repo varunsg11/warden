@@ -18,6 +18,7 @@ from warden.governance.audit import AuditLog
 from warden.governance.gate import Gate
 from warden.governance.issuer import Supervisor
 from warden.governance.policy import DEFAULT_TASK
+from warden.governance.provenance import Provenance
 from warden.llm import LLMBackend, get_llm
 from warden.pipeline.agents import refund_node, retriever_node, summarizer_node
 from warden.pipeline.runner import GatedToolRunner, Runner, ToolRunner
@@ -82,8 +83,13 @@ def build_governed_pipeline(
             ],
         )
 
+    # Provenance: the user's request is the trusted input; the runner adds every
+    # tool output (e.g. retrieved documents) as untrusted.
+    provenance = Provenance()
+    provenance.add_trusted(user_request, "user request")
+
     # The gate gets only the PUBLIC verify key -- it can check, never mint.
     gate = Gate(supervisor.verifier)
-    runner = GatedToolRunner(gate, manifests, audit, drift=drift)
+    runner = GatedToolRunner(gate, manifests, audit, drift=drift, provenance=provenance)
 
     return _compile(llm, runner), supervisor, manifests, runner, audit

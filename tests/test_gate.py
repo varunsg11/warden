@@ -14,10 +14,15 @@ from warden.governance.audit import AuditLog
 from warden.governance.capability import Capability
 from warden.governance.gate import Gate, GateViolation
 from warden.governance.issuer import Supervisor
+from warden.governance.provenance import Provenance
 from warden.llm import ToolCall
 from warden.pipeline import tools
 from warden.pipeline.runner import GatedToolRunner
 from warden.pipeline.tools import TOOL_SPECS
+
+# The session's trusted input: the refund policy requires the account to come from it.
+TRUSTED = Provenance()
+TRUSTED.add_trusted("Customer on account 1234 requests a refund.", "user request")
 
 
 def _setup():
@@ -38,7 +43,12 @@ def test_allows_in_bounds_refund():
     sup, gate = _setup()
     manifest = sup.issue_manifest("refund_issuer", "process_refund")
     d = gate.check(
-        "refund_issuer", "issue_refund", {"account": "1234", "amount": 25.0}, "write", manifest
+        "refund_issuer",
+        "issue_refund",
+        {"account": "1234", "amount": 25.0},
+        "write",
+        manifest,
+        provenance=TRUSTED,
     )
     assert d.allowed
 
@@ -208,8 +218,9 @@ def test_single_use_capability_cannot_be_replayed():
     sup, gate = _setup()
     manifest = sup.issue_manifest("refund_issuer", "process_refund")
     args = {"account": "1234", "amount": 49.0}
-    assert gate.check("refund_issuer", "issue_refund", args, "write", manifest).allowed
-    d = gate.check("refund_issuer", "issue_refund", args, "write", manifest)
+    check = [args, "write", manifest]
+    assert gate.check("refund_issuer", "issue_refund", *check, provenance=TRUSTED).allowed
+    d = gate.check("refund_issuer", "issue_refund", *check, provenance=TRUSTED)
     assert not d.allowed
     assert "already used" in d.reason
 
@@ -219,8 +230,13 @@ def test_evaluate_does_not_consume_a_use():
     manifest = sup.issue_manifest("refund_issuer", "process_refund")
     args = {"account": "1234", "amount": 10.0}
     for _ in range(3):
-        assert gate.evaluate("refund_issuer", "issue_refund", args, "write", manifest).allowed
-    assert gate.check("refund_issuer", "issue_refund", args, "write", manifest).allowed
+        d = gate.evaluate(
+            "refund_issuer", "issue_refund", args, "write", manifest, provenance=TRUSTED
+        )
+        assert d.allowed
+    assert gate.check(
+        "refund_issuer", "issue_refund", args, "write", manifest, provenance=TRUSTED
+    ).allowed
 
 
 def test_gate_error_fails_closed():

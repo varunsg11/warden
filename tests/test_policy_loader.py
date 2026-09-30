@@ -15,19 +15,25 @@ from warden.governance.policy import DEFAULT_POLICY, POLICY
 from warden.governance.policy_loader import PolicyError, load_policy, parse_policy
 from warden.pipeline.tools import TOOL_SCOPES
 
-# The policy as it was written in Python before it moved to default.toml.
+# The expected default policy: the pre-TOML Python policy, plus the provenance
+# rules (`from = "trusted"`) added with the gate's provenance check.
 _READ_DOCS = {"tool": "search_docs", "scope": "read", "params": {}, "ttl": 30.0}
 _REFUND = {
     "tool": "issue_refund",
     "scope": "write",
     "params": {
         "amount": {"min": 0.01, "max": 50.0},
-        "account": {"allow": ["1234", "5678", "4321"]},
+        "account": {"allow": ["1234", "5678", "4321"], "from": "trusted"},
     },
     "ttl": 30.0,
     "max_uses": 1,
 }
-_EMAIL = {"tool": "send_email", "scope": "write", "params": {}, "ttl": 30.0}
+_EMAIL = {
+    "tool": "send_email",
+    "scope": "write",
+    "params": {"to": {"from": "trusted"}},
+    "ttl": 30.0,
+}
 LEGACY_POLICY = {
     "summarize": {"retriever": [_READ_DOCS], "summarizer": [], "refund_issuer": []},
     "process_refund": {"retriever": [_READ_DOCS], "summarizer": [], "refund_issuer": [_REFUND]},
@@ -108,8 +114,7 @@ def _template(data: dict) -> dict:
         (lambda d: _template(d)["params"].update(amount={"max": float("nan")}), "finite number"),
         (lambda d: _template(d)["params"].update(amount={"min": 5, "max": 1}), "greater than max"),
         (lambda d: _template(d)["params"].update(to={"allow": []}), "non-empty list"),
-        # Not enforced by the gate yet, so it must not be accepted as if it were.
-        (lambda d: _template(d)["params"].update(to={"from": "trusted"}), "unknown rule"),
+        (lambda d: _template(d)["params"].update(to={"from": "user"}), "from must be one of"),
     ],
 )
 def test_malformed_policies_are_rejected(mutation, expected):

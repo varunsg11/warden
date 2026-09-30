@@ -85,3 +85,10 @@ user_task_36 = "create_file"
 user_task_37 = "create_and_share_file"
 user_task_38 = "delete_file"
 user_task_39 = "read_only"
+
+# task+prov: destinations and credentials (see banking.toml).
+[provenance]
+send_email = ["recipients", "cc", "bcc"]
+share_file = ["email"]
+create_calendar_event = ["participants"]
+add_calendar_event_participants = ["participants"]

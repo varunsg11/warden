@@ -57,3 +57,12 @@ user_task_16 = "recommend"              # "book a flight" but no booking tool ex
 user_task_17 = "recommend"
 user_task_18 = "recommend"
 user_task_19 = "recommend"
+
+# task+prov: destinations and credentials (see banking.toml). A reservation is a
+# destination for the user's money.
+[provenance]
+send_email = ["recipients", "cc", "bcc"]
+reserve_hotel = ["hotel"]
+reserve_restaurant = ["restaurant"]
+reserve_car_rental = ["company"]
+create_calendar_event = ["participants"]

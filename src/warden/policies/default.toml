@@ -25,7 +25,9 @@ refund_issuer = []
 tool = "search_docs"
 scope = "read"
 
-# --- process_refund: ONE refund per turn, $0.01-$50, only to known accounts.
+# --- process_refund: ONE refund per turn, $0.01-$50, only to known accounts --
+# and only to the account the TRUSTED request named. An injection that steers the
+# agent to a different allowlisted account is caught by provenance, not the allowlist.
 [tasks.process_refund]
 summarizer = []
 
@@ -38,11 +40,12 @@ tool = "issue_refund"
 scope = "write"
 max_uses = 1
 params.amount = { min = 0.01, max = 50.0 }
-params.account = { allow = ["1234", "5678", "4321"] }
+params.account = { allow = ["1234", "5678", "4321"], from = "trusted" }
 
-# --- reply_to_customer: send_email can't be tightly param-constrained (you can't
-# allowlist every legitimate recipient), so the gate permits it broadly and the
-# DRIFT detector watches the destination domain.
+# --- reply_to_customer: you can't allowlist every legitimate recipient, so the
+# recipient must instead be one the TRUSTED request named (provenance), and the
+# DRIFT detector still watches the destination domain.
 [[tasks.reply_to_customer.responder]]
 tool = "send_email"
 scope = "write"
+params.to = { from = "trusted" }

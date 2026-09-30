@@ -25,6 +25,7 @@ from warden.governance.audit import AuditLog
 from warden.governance.drift import DriftDetector, DriftViolation
 from warden.governance.gate import Gate, GateViolation
 from warden.governance.issuer import Supervisor
+from warden.governance.provenance import Provenance
 from warden.llm import ToolCall, get_llm
 from warden.pipeline.agents import refund_node, retriever_node, summarizer_node
 from warden.pipeline.state import PipelineState
@@ -44,8 +45,9 @@ def hr(title: str = "") -> None:
 class TracingRunner:
     """Same logic as GatedToolRunner, but narrates every check out loud."""
 
-    def __init__(self, gate: Gate, manifests, drift, audit) -> None:
+    def __init__(self, gate: Gate, manifests, drift, audit, provenance: Provenance) -> None:
         self.gate, self.manifests, self.drift, self.audit = gate, manifests, drift, audit
+        self.provenance = provenance
 
     def execute(self, role: str, call: ToolCall) -> str:
         print(f"\n  >> {role} PROPOSES: {call.name}({call.arguments})")
@@ -61,6 +63,7 @@ class TracingRunner:
             required,
             self.manifests.get(role, []),
             arg_schema=spec.parameters if spec else None,
+            provenance=self.provenance,
         )
         print(f"     Stage 1 - GATE (required scope: {required}):")
         for s in decision.steps:
@@ -92,6 +95,7 @@ class TracingRunner:
         result = TOOL_IMPLS[call.name](**call.arguments)
         print(f"     -> ALLOWED and EXECUTED: {result[:60]}")
         self.audit.record("tool_executed", role=role, tool=call.name)
+        self.provenance.add_untrusted(result, f"output of {call.name}")
         return result
 
 
@@ -103,7 +107,9 @@ def main(task: str = "summarize") -> None:
     drift = DriftDetector()  # empty baseline here; drift is exercised in run_drift.py
     manifests = sup.issue_all(ROLES + ["responder"], task)
     audit = AuditLog(f"trace-{task}")
-    runner = TracingRunner(gate, manifests, drift, audit)
+    provenance = Provenance()
+    provenance.add_trusted(USER_REQUEST, "user request")
+    runner = TracingRunner(gate, manifests, drift, audit, provenance)
     audit.record("session_start", task=task, user_request=USER_REQUEST)
 
     hr(f"WARDEN DEBUG FLOW  (task='{task}')")

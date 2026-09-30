@@ -9,6 +9,10 @@ Configurations (the policy the gate enforces):
           needs. Decided from the prompt alone -- what a real app knows.
   oracle  Grants exactly the tools in each task's ground truth. An UPPER BOUND
           for tool-level least privilege, not a deployable config.
+  task+prov
+          `task`, plus provenance: arguments listed under [provenance] in the
+          suite spec (destinations and credentials) must appear in the user's
+          prompt, not only in tool output.
 
 Models:
   scripted                 offline, $0, deterministic: an agent that performs the
@@ -63,7 +67,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 BENCHMARK_VERSION = "v1.2.2"
 SUITES = ("workspace", "travel", "banking", "slack")
-CONFIGS = ("none", "suite", "task", "oracle")
+CONFIGS = ("none", "suite", "task", "oracle", "task+prov")
 # The scripted agent needs a pipeline name containing a real model id, because
 # the attack template addresses the victim model by name.
 SCRIPTED_TARGET = "gpt-4o-mini-2024-07-18"
@@ -83,8 +87,16 @@ def build_policy(config: str, suite: Any, spec: dict) -> tuple[Policy, Callable[
     reads = [name for name, scope in tools.items() if scope == "read"]
     prompt_to_task = {ut.PROMPT: uid for uid, ut in suite.user_tasks.items()}
 
+    trusted_args: dict[str, list[str]] = spec.get("provenance", {}) if config == "task+prov" else {}
+
     def grant(names: list[str]) -> list[dict[str, Any]]:
-        return [{"tool": n, "scope": tools[n], "ttl": EXPERIMENT_TTL} for n in names]
+        templates: list[dict[str, Any]] = []
+        for n in names:
+            template: dict[str, Any] = {"tool": n, "scope": tools[n], "ttl": EXPERIMENT_TTL}
+            if n in trusted_args:
+                template["params"] = {arg: {"from": "trusted"} for arg in trusted_args[n]}
+            templates.append(template)
+        return templates
 
     tasks: dict[str, dict[str, list[dict[str, Any]]]] = {NO_AUTHORITY: {ROLE: []}}
     if config == "suite":
@@ -93,7 +105,7 @@ def build_policy(config: str, suite: Any, spec: dict) -> tuple[Policy, Callable[
         def declare(prompt: str) -> str:
             return "suite"
 
-    elif config == "task":
+    elif config in ("task", "task+prov"):
         undeclared = set(suite.user_tasks) - set(spec["declare"])
         if undeclared:
             raise SystemExit(f"{suite.name}: user tasks without a declared workflow: {undeclared}")
@@ -147,6 +159,7 @@ def build_pipeline(
         policy=policy,
         declare_task=declare,
         quarantine_on_deny=(on_deny == "quarantine"),
+        track_provenance=(config == "task+prov"),
         audit_dir=audit_dir,
     )
     pipeline = AgentPipeline(

@@ -18,7 +18,9 @@ The checks, in order:
   5. not_expired         within its ttl
   6. scope_ok            grants the scope the operation needs
   7. params_ok           arguments inside the granted envelope
-  8. uses_remaining      not already spent (single-use caps can't be replayed)
+  8. provenance_ok       values the policy marks `from = "trusted"` came from
+                         trusted text (the user's request), not from tool output
+  9. uses_remaining      not already spent (single-use caps can't be replayed)
 
 `evaluate()` returns both the Decision AND a per-check trace, and has no side
 effects. `check()` is what enforcement calls: it records the use on ALLOW, and it
@@ -31,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from warden.governance.capability import Capability
+from warden.governance.provenance import Provenance
 from warden.governance.schema import validate_args
 from warden.governance.signing import Verifier
 
@@ -73,10 +76,11 @@ class Gate:
         manifest: list[Capability],
         now: float | None = None,
         arg_schema: dict[str, Any] | None = None,
+        provenance: Provenance | None = None,
     ) -> Decision:
         try:
             decision = self.evaluate(
-                role, tool_name, arguments, required_scope, manifest, now, arg_schema
+                role, tool_name, arguments, required_scope, manifest, now, arg_schema, provenance
             )
         except Exception as exc:  # fail closed: an error must never become an allow
             return Decision(False, f"DENY: gate error ({type(exc).__name__}: {exc})")
@@ -94,6 +98,7 @@ class Gate:
         manifest: list[Capability],
         now: float | None = None,
         arg_schema: dict[str, Any] | None = None,
+        provenance: Provenance | None = None,
     ) -> Decision:
         # 1. Does the agent hold ANY capability for this tool this turn?
         candidates = [c for c in manifest if c.tool == tool_name]
@@ -175,7 +180,18 @@ class Gate:
                 decisive = steps
                 continue
 
-            # 8. Uses: a spent capability can't be replayed for another call.
+            # 8. Provenance: values the policy requires to be user-supplied must
+            #    appear in trusted text -- not only in (attacker-influenceable) tool output.
+            ok, why = _provenance_ok(cap, arguments, provenance)
+            steps.append(
+                CheckStep("provenance_ok", ok, why or "sensitive values from trusted input")
+            )
+            if not ok:
+                last_reason = f"DENY: untrusted provenance on '{tool_name}': {why}"
+                decisive = steps
+                continue
+
+            # 9. Uses: a spent capability can't be replayed for another call.
             used = self._uses.get(cap.nonce, 0)
             ok = cap.max_uses is None or used < cap.max_uses
             limit = "unlimited" if cap.max_uses is None else str(cap.max_uses)
@@ -192,3 +208,22 @@ class Gate:
             )
 
         return Decision(False, last_reason, candidates[0], header + decisive)
+
+
+def _provenance_ok(
+    cap: Capability, arguments: dict[str, Any], provenance: Provenance | None
+) -> tuple[bool, str]:
+    for name, rule in cap.params.items():
+        if rule.get("from") != "trusted":
+            continue
+        if provenance is None:  # fail closed: a provenance rule nobody can check
+            return False, f"'{name}' must come from trusted input, but provenance isn't tracked"
+        value = arguments.get(name)
+        if value is None or value == []:
+            continue  # an omitted optional argument (no cc, no new recipient) steers nothing
+        origin = provenance.origin(value)
+        if origin != "trusted":
+            seen = provenance.untrusted_sources(value)
+            where = f"appears only in untrusted {', '.join(seen)}" if seen else "appears nowhere"
+            return False, f"{name}={value!r} is not from trusted input ({where})"
+    return True, ""

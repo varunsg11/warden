@@ -23,6 +23,7 @@ from warden.evaluation.cases import ATTACKS, BASELINE, CLEAN
 from warden.governance.drift import DriftDetector, DriftViolation
 from warden.governance.gate import Gate, GateViolation
 from warden.governance.issuer import Supervisor
+from warden.governance.provenance import Provenance
 from warden.llm import ToolCall
 from warden.pipeline import tools as tool_mod
 from warden.pipeline.runner import GatedToolRunner, ToolRunner
@@ -31,15 +32,19 @@ from warden.pipeline.runner import GatedToolRunner, ToolRunner
 def _warden(gate, detector, sup, case):
     tool_mod.reset_world()
     manifests = {case.role: sup.issue_manifest(case.role, case.task)}
-    runner = GatedToolRunner(gate, manifests, drift=detector)
+    provenance = Provenance()
+    provenance.add_trusted(case.trusted_context, "user request")
+    provenance.add_untrusted(case.untrusted_context, "retrieved document")
+    runner = GatedToolRunner(gate, manifests, drift=detector, provenance=provenance)
     call = ToolCall(name=case.tool, arguments=dict(case.arguments))
     try:
         runner.execute(case.role, call)
-        return False, None
-    except GateViolation:
-        return True, "gate"
+        return False, None, None
+    except GateViolation as violation:
+        failed = [s.name for s in violation.decision.steps if not s.passed]
+        return True, "gate", failed[-1] if failed else None
     except DriftViolation:
-        return True, "drift"
+        return True, "drift", None
 
 
 def _baseline(case) -> bool:
@@ -58,15 +63,21 @@ def run() -> dict:
 
     attacks = []
     for c in ATTACKS:
-        contained, stage = _warden(gate, detector, sup, c)
+        contained, stage, check = _warden(gate, detector, sup, c)
         attacks.append(
-            {"case": c, "contained": contained, "stage": stage, "baseline_contained": _baseline(c)}
+            {
+                "case": c,
+                "contained": contained,
+                "stage": stage,
+                "check": check,
+                "baseline_contained": _baseline(c),
+            }
         )
 
     clean = []
     for c in CLEAN:
-        contained, stage = _warden(gate, detector, sup, c)
-        clean.append({"case": c, "contained": contained, "stage": stage})
+        contained, stage, check = _warden(gate, detector, sup, c)
+        clean.append({"case": c, "contained": contained, "stage": stage, "check": check})
 
     n_a = len(attacks)
     n_a_contained = sum(a["contained"] for a in attacks)
@@ -98,7 +109,8 @@ def main() -> None:
     for a in r["attacks"]:
         c = a["case"]
         mark = f"contained@{a['stage']}" if a["contained"] else "LEAKED"
-        print(f"  [{mark:<16}] {c.name:<38} ({c.category})")
+        by = f"by {a['check']}" if a["check"] else ""
+        print(f"  [{mark:<16}] {c.name:<46} {by:<23} ({c.category})")
 
     print("\nCLEAN (should pass):")
     for x in r["clean"]:

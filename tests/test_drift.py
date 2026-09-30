@@ -7,6 +7,7 @@ import pytest
 from warden.governance.drift import DriftDetector, DriftViolation
 from warden.governance.gate import Gate
 from warden.governance.issuer import Supervisor
+from warden.governance.provenance import Provenance
 from warden.llm import ToolCall
 from warden.pipeline import tools
 from warden.pipeline.runner import GatedToolRunner
@@ -52,7 +53,9 @@ def test_runner_quarantines_in_bounds_but_drifting_call():
     sup = Supervisor()
     gate = Gate(sup.verifier)
     manifests = {"refund_issuer": sup.issue_manifest("refund_issuer", "process_refund")}
-    runner = GatedToolRunner(gate, manifests, drift=_detector())
+    provenance = Provenance()
+    provenance.add_trusted("Customer on account 1234 requests a refund.", "user request")
+    runner = GatedToolRunner(gate, manifests, drift=_detector(), provenance=provenance)
 
     # In policy (account 1234, amount <= 50) so the gate ALLOWS -- drift must catch it.
     call = ToolCall(name="issue_refund", arguments={"account": "1234", "amount": 49.99})

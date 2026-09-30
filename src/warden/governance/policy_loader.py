@@ -18,7 +18,7 @@ Shape:
     ttl = 30.0                   # optional, seconds (default 30)
     max_uses = 1                 # optional, omit for unlimited within ttl
     params.amount  = { min = 0.01, max = 50.0 }
-    params.account = { allow = ["1234", "5678"] }
+    params.account = { allow = ["1234", "5678"], from = "trusted" }
 
 A role with no authority under a task is written as an empty list
 (`refund_issuer = []`), which makes "grants nothing" explicit in the file.
@@ -37,9 +37,11 @@ from typing import Any
 SCOPES = frozenset({"read", "write", "execute"})
 _TOP_KEYS = frozenset({"default_task", "tools", "tasks"})
 _TEMPLATE_KEYS = frozenset({"tool", "scope", "params", "ttl", "max_uses"})
-# Only rules Capability.params_ok enforces. A rule the gate can't enforce must be
-# rejected here, or the policy would promise a restriction nothing checks.
-_RULE_KEYS = frozenset({"min", "max", "allow"})
+# Only rules the gate enforces (params_ok: min/max/allow; provenance_ok: from).
+# A rule the gate can't enforce must be rejected here, or the policy would
+# promise a restriction nothing checks.
+_RULE_KEYS = frozenset({"min", "max", "allow", "from"})
+_ORIGINS = frozenset({"trusted"})
 DEFAULT_TTL = 30.0
 
 
@@ -159,6 +161,8 @@ def _check_rule(rule: Any, where: str, fail: Any) -> None:
         raise fail(f"{where}: min {rule['min']} is greater than max {rule['max']}")
     if "allow" in rule and (not isinstance(rule["allow"], list) or not rule["allow"]):
         raise fail(f"{where}: allow must be a non-empty list")
+    if "from" in rule and rule["from"] not in _ORIGINS:
+        raise fail(f"{where}: from must be one of {sorted(_ORIGINS)}")
 
 
 def _is_number(value: Any) -> bool:

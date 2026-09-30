@@ -51,6 +51,7 @@ from warden.governance.drift import DriftViolation
 from warden.governance.gate import Gate, GateViolation
 from warden.governance.issuer import Supervisor
 from warden.governance.policy_loader import Policy
+from warden.governance.provenance import Provenance
 from warden.llm import ToolCall
 from warden.pipeline.runner import GatedToolRunner
 
@@ -70,6 +71,9 @@ class WardenConfig:
     policy: Policy
     declare_task: Callable[[str], str]
     quarantine_on_deny: bool = True
+    # Track where text came from (user prompt = trusted, tool output = untrusted)
+    # so `from = "trusted"` rules in the policy can be enforced.
+    track_provenance: bool = False
     audit_dir: Path | None = None
     # Filled in during the run, for reporting: which check denied how often.
     denials: Counter[str] = field(default_factory=Counter)
@@ -100,6 +104,10 @@ class WardenSession(BasePipelineElement):
             session_id = f"agentdojo-{uuid.uuid4().hex[:8]}"
             audit = AuditLog(session_id, path=cfg.audit_dir / f"{session_id}.jsonl")
             audit.record("session_start", task=task, user_request=query)
+        provenance = None
+        if cfg.track_provenance:
+            provenance = Provenance()
+            provenance.add_trusted(query, "user prompt")
         runner = GatedToolRunner(
             Gate(supervisor.verifier),
             {ROLE: supervisor.issue_manifest(ROLE, task)},
@@ -107,6 +115,7 @@ class WardenSession(BasePipelineElement):
             scopes=cfg.policy.tools,
             schemas={f.name: f.parameters.model_json_schema() for f in runtime.functions.values()},
             quarantine_on_deny=cfg.quarantine_on_deny,
+            provenance=provenance,
         )
         cfg.episodes += 1
         # extra_args defaults to a shared dict in AgentDojo: never mutate it in place.
@@ -175,7 +184,9 @@ class WardenToolsExecutor(ToolsExecutor):
                 continue
 
             output, error = runtime.run_function(env, call.function, call.args)
-            results.append(_tool_result(call, self.output_formatter(output), error))
+            text = self.output_formatter(output)
+            runner.observe(call.function, text)  # tool output is untrusted text
+            results.append(_tool_result(call, text, error))
         return query, runtime, env, [*messages, *results], extra_args
 
     def _count_denial(self, violation: Exception) -> None:

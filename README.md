@@ -1,6 +1,6 @@
 # Warden
 
-[![CI](https://github.com/varunsg11/warden-agent-governance/actions/workflows/ci.yml/badge.svg)](https://github.com/varunsg11/warden-agent-governance/actions/workflows/ci.yml)
+[![CI](https://github.com/varunsg11/warden/actions/workflows/ci.yml/badge.svg)](https://github.com/varunsg11/warden/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://github.com/astral-sh/ruff)
@@ -12,9 +12,11 @@ malicious text hidden in the data it reads, so you instead **constrain what a
 fooled agent is allowed to do** — with authorization enforced by deterministic
 code that sits *outside* the agent's reasoning loop.
 
-> **`warden eval` → contained 100% of indirect-injection attacks (11/11) that the
+> **`warden eval` → contained 100% of indirect-injection attacks (15/15) that the
 > ungated baseline executed 0% of, with an 8% false-quarantine rate (2/26) on clean
-> traffic.** 8 caught by the capability gate, 3 by the drift detector.
+> traffic.** 10 caught by the capability gate, 5 by the drift detector — including
+> evasions aimed at the checks themselves (NaN amounts, negative refunds, exfil
+> addresses hidden among known recipients or behind a display name).
 
 ## The core idea
 
@@ -33,7 +35,7 @@ flowchart LR
     U["user request<br/>+ trusted task"] --> SUP["Supervisor<br/>signs per-task capabilities"]
     DOC[("knowledge base<br/>(attacker-influenceable)")] --> AG["agents<br/>(can be fooled)"]
     SUP -->|manifests| GATE
-    AG -->|proposes tool call| GATE{"Gate<br/>5 checks"}
+    AG -->|proposes tool call| GATE{"Gate<br/>8 checks"}
     GATE -->|DENY| Q["quarantine<br/>+ audit"]
     GATE -->|ALLOW| DRIFT{"Drift<br/>anomaly?"}
     DRIFT -->|anomaly| Q
@@ -61,14 +63,16 @@ warden governed --fake   # same injection, blocked at the gate, session quaranti
 warden drift             # the anomaly detector catches in-policy-but-abnormal calls
 warden trace --fake      # narrated, step-by-step debug flow of one request
 warden eval              # attack-containment + false-quarantine numbers
+warden audit-verify audit/<session>.jsonl   # re-check a log's hash chain on disk
 ```
 
 `warden baseline` ends with a refund of $999.99 wired to `ATTACKER-0001`.
 `warden governed` ends with that same proposal **denied before it runs**, and a
-tamper-evident audit log written to `audit/`.
+tamper-evident audit log written to `audit/` (verify it any time with
+`warden audit-verify`).
 
 **Understand the system** with `warden trace` — it walks one request through every
-stage (each agent, the gate's five checks, drift, quarantine, audit) and prints a
+stage (each agent, the gate's eight checks, drift, quarantine, audit) and prints a
 `PASS`/`FAIL` line for each check. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 for the threat model and enforcement-flow diagram, and [CONCEPTS.md](CONCEPTS.md)
 for the theory tied to each file.
@@ -91,6 +95,7 @@ decision = gate.check(
     arguments={"account": "1234", "amount": 20.0},
     required_scope="write",
     manifest=manifest,
+    arg_schema=None,  # optional: the tool's JSON Schema, checked before any bound
 )
 
 if decision.allowed:

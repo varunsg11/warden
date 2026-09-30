@@ -13,8 +13,8 @@ Read the difference:
                              carries no authority to move money, so an injected
                              "issue a refund" is denied at the very first check:
                              the capability to do it was never handed out.
-  * task "process_refund" -> refund_issuer may issue refunds, but only <= $50 and
-                             only to the customer's own account (1234).
+  * task "process_refund" -> refund_issuer may issue ONE refund per turn, between
+                             $0.01 and $50, only to the customer's known accounts.
 """
 
 from __future__ import annotations
@@ -27,10 +27,11 @@ _CONSTRAINED_REFUND = {
     "tool": "issue_refund",
     "scope": "write",
     "params": {
-        "amount": {"max": 50.0},  # small refunds only
+        "amount": {"min": 0.01, "max": 50.0},  # small, positive refunds only
         "account": {"allow": ["1234", "5678", "4321"]},  # the customer's known accounts
     },
     "ttl": 30.0,
+    "max_uses": 1,  # one refund per turn: the cap can't be replayed for 50 more
 }
 
 # send_email can't be tightly param-constrained -- you can't allowlist every

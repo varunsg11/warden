@@ -25,7 +25,7 @@ flowchart TD
     end
     subgraph gov["GOVERNANCE — deterministic, no LLM"]
         SUP["Supervisor<br/>issues signed capability manifests (per role, per task)"]
-        GATE{"Gate<br/>5 checks: capability? sig? ttl? scope? params?"}
+        GATE{"Gate<br/>8 checks: capability? well-formed? sig? role? ttl? scope? params? uses?"}
         DRIFT{"Drift detector<br/>novel destination / outlier?"}
         Q["Quarantine"]
         AUD[("Audit log<br/>hash-chained, tamper-evident")]
@@ -60,19 +60,29 @@ arrow; it can't touch the top one.
 
 1. **Capability manifest + Supervisor** — before each turn, the Supervisor mints a set
    of Ed25519-signed capabilities for each role, scoped to the declared task.
-   `c = (tool, params, scope, ttl, nonce, issuer, signature)`.
+   `c = (tool, params, scope, ttl, nonce, issuer, subject, max_uses, signature)`.
    [`issuer.py`](../src/warden/governance/issuer.py), [`capability.py`](../src/warden/governance/capability.py), [`policy.py`](../src/warden/governance/policy.py).
 
-2. **Enforcement gate** — intercepts every proposed call and runs five deterministic
-   checks (holds a capability, valid signature, not expired, in scope, in params).
-   Any failure → the call never runs. [`gate.py`](../src/warden/governance/gate.py).
+2. **Enforcement gate** — intercepts every proposed call and runs eight deterministic
+   checks (capability present, arguments well-formed, valid signature, bound to the
+   calling role, not expired, in scope, in params envelope, uses remaining).
+   Any failure → the call never runs. The gate **fails closed**: malformed values
+   (NaN, bools, strings where numbers belong, unexpected keys) are rejected by a
+   schema check before any bound is compared, and any internal error becomes a DENY.
+   Capabilities are bound to the role they were issued to and can be single-use, so a
+   leaked or replayed capability is worthless. [`gate.py`](../src/warden/governance/gate.py),
+   [`schema.py`](../src/warden/governance/schema.py).
 
 3. **Drift detector** — a second stage for in-bounds-but-abnormal calls, using
-   statistics (novel category, numeric outlier), never an LLM.
+   statistics (novel category, numeric outlier), never an LLM. Every recipient of an
+   email is checked, and a watched feature that is missing or unparseable counts as
+   drift rather than being skipped.
    [`drift.py`](../src/warden/governance/drift.py).
 
 4. **Quarantine + audit** — on any violation, halt the session and record the full
-   trace to a tamper-evident, hash-chained JSONL log. [`audit.py`](../src/warden/governance/audit.py).
+   trace to a tamper-evident, hash-chained JSONL log. `warden audit-verify` re-checks
+   a log on disk and requires a terminal `session_end`, so a truncated tail is detected
+   too. [`audit.py`](../src/warden/governance/audit.py).
 
 The seam that makes it composable is the **runner** ([`runner.py`](../src/warden/pipeline/runner.py)):
 agents never call tools directly, they hand proposals to a runner. Swap the ungated
@@ -83,9 +93,11 @@ security as a wrapper, not a rewrite.
 
 Against an InjecAgent-style suite ([`warden/evaluation/`](../src/warden/evaluation/)):
 
-> Warden contained **100% of attacks (11/11)** that the ungated baseline executed **0%**
-> of — 8 stopped by the gate, 3 by drift — with an **8% false-quarantine rate (2/26)**
-> on clean traffic.
+> Warden contained **100% of attacks (15/15)** that the ungated baseline executed **0%**
+> of — 10 stopped by the gate, 5 by drift — with an **8% false-quarantine rate (2/26)**
+> on clean traffic. Four of the attacks are evasions aimed at the checks themselves;
+> before the fail-closed hardening, two of them (a NaN amount and a multi-recipient
+> email) leaked, for 87% containment.
 
 Containment is a design guarantee for any harmful action outside the granted envelope;
 it is therefore only as strong as the least-privilege policy. All false-positive risk
@@ -96,6 +108,9 @@ lives in the drift detector (the gate has none) and is tuned by its z-score thre
 - **Containment depends on policy tightness.** A loose capability (e.g. "any account")
   would let an in-envelope attack through. Warden enforces the envelope you define; it
   doesn't invent a good one for you.
+- **Audit truncation is detected, not prevented.** A local attacker who can rewrite the
+  whole file can recompute the chain; anchoring the head hash (or signing it) outside
+  the host is the next step.
 - **Task classification is trusted-input.** We assume the application declares the task
   honestly. Deriving intent from the user's message would need its own (non-injectable)
   handling.

@@ -25,6 +25,8 @@ Two simple, explainable signals:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from email.utils import getaddresses
+from math import isfinite
 from statistics import mean, pstdev
 from typing import Any
 
@@ -35,14 +37,37 @@ FEATURE_SPEC: dict[str, dict[str, Any]] = {
 }
 
 
+def _email_domains(to: Any) -> list[str]:
+    """Every recipient domain in `to`, normalized. Parses the whole header, so an
+    attacker address can't hide behind a display name ("Alice <x@evil.com>") or
+    among known recipients ("x@evil.com, alice@gmail.com"). Returns [] if any
+    recipient is unparseable -- the caller treats that as missing, i.e. drift."""
+    if not isinstance(to, str):
+        return []
+    domains: list[str] = []
+    for _, addr in getaddresses([to]):
+        local, at, domain = addr.rpartition("@")
+        domain = domain.strip().lower().rstrip(".")
+        if not (local and at and domain):
+            return []
+        domains.append(domain)
+    return domains
+
+
 def _derive(tool: str, args: dict) -> dict:
     """Add derived features. For email we watch the DOMAIN, not the full address,
     so a new legitimate customer at a known provider isn't flagged."""
     if tool == "send_email":
-        to = args.get("to", "")
-        if isinstance(to, str) and "@" in to:
-            return {**args, "to_domain": to.rsplit("@", 1)[-1].lower()}
+        feats = dict(args)
+        domains = _email_domains(args.get("to"))
+        if domains:
+            feats["to_domain"] = domains
+        return feats
     return dict(args)
+
+
+def _as_list(value: Any) -> list:
+    return value if isinstance(value, list) else [value]
 
 
 @dataclass
@@ -80,7 +105,9 @@ class DriftDetector:
         feats = _derive(tool, args)
         for f in spec.get("categorical", []):
             if f in feats:
-                self._categorical.setdefault(tool, {}).setdefault(f, set()).add(feats[f])
+                self._categorical.setdefault(tool, {}).setdefault(f, set()).update(
+                    _as_list(feats[f])
+                )
         for f in spec.get("numeric", {}):
             if feats.get(f) is not None:
                 self._numeric.setdefault(tool, {}).setdefault(f, []).append(float(feats[f]))
@@ -95,21 +122,34 @@ class DriftDetector:
         reasons: list[str] = []
         score = 0.0
 
+        # A watched feature we have a baseline for but can't read off this call is
+        # itself an anomaly: fail closed, don't skip the check.
         for f in spec.get("categorical", []):
             seen = self._categorical.get(tool, {}).get(f, set())
-            if seen and f in feats and feats[f] not in seen:
-                reasons.append(
-                    f"novel {f}={feats[f]!r} (never seen in {len(seen)} baseline values)"
-                )
+            if not seen:
+                continue
+            if f not in feats:
+                reasons.append(f"missing/unparseable {f} (baseline has {len(seen)} values)")
+                score = max(score, 1.0)
+                continue
+            novel = [v for v in _as_list(feats[f]) if v not in seen]
+            if novel:
+                shown = novel[0] if len(novel) == 1 else novel
+                reasons.append(f"novel {f}={shown!r} (never seen in {len(seen)} baseline values)")
                 score = max(score, 1.0)
 
         for f, z_threshold in spec.get("numeric", {}).items():
             values = self._numeric.get(tool, {}).get(f, [])
-            if feats.get(f) is None or len(values) < self.min_samples:
+            if len(values) < self.min_samples:
+                continue
+            raw = feats.get(f)
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not isfinite(raw):
+                reasons.append(f"missing/non-finite {f}={raw!r}")
+                score = max(score, 1.0)
                 continue
             mu = mean(values)
             sd = pstdev(values)
-            value = float(feats[f])
+            value = float(raw)
             if sd == 0:
                 if value != mu:
                     reasons.append(f"{f}={value} differs from constant baseline {mu}")

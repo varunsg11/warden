@@ -32,6 +32,8 @@ class Supervisor:
                 ttl=template.get("ttl", 30.0),
                 nonce=uuid.uuid4().hex,
                 issuer=self.issuer_id,
+                subject=role,
+                max_uses=template.get("max_uses"),
             ).signed(self.signer)
             manifest.append(cap)
         return manifest

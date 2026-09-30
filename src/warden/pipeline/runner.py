@@ -22,7 +22,7 @@ from warden.governance.capability import Capability
 from warden.governance.drift import DriftDetector, DriftViolation
 from warden.governance.gate import Gate, GateViolation
 from warden.llm import ToolCall
-from warden.pipeline.tools import TOOL_IMPLS, TOOL_SCOPES
+from warden.pipeline.tools import TOOL_IMPLS, TOOL_SCOPES, TOOL_SPECS
 
 
 class Runner(Protocol):
@@ -57,13 +57,16 @@ class GatedToolRunner:
             self.audit.record("tool_proposed", role=role, tool=call.name, arguments=call.arguments)
 
         # --- Stage 1: the capability gate (is this call in bounds?) --------- #
-        required_scope = TOOL_SCOPES[call.name]
+        # An unknown tool gets no scope and no schema; it holds no capability
+        # either, so the gate denies it (audited) instead of a KeyError here.
+        spec = TOOL_SPECS.get(call.name)
         decision = self._gate.check(
             role=role,
             tool_name=call.name,
             arguments=call.arguments,
-            required_scope=required_scope,
+            required_scope=TOOL_SCOPES.get(call.name, ""),
             manifest=self._manifests.get(role, []),
+            arg_schema=spec.parameters if spec else None,
         )
         self.decisions.append(decision)
 

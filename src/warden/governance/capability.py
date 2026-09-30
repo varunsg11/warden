@@ -3,7 +3,7 @@ specific constraints.
 
 Formal shape (from the MCP-capability literature):
 
-    c = (tool, params, scope, ttl, nonce, issuer, signature)
+    c = (tool, params, scope, ttl, nonce, issuer, subject, max_uses, signature)
 
   * tool      — the single tool this authorizes (e.g. "issue_refund").
   * scope     — read | write | execute. Least privilege: a "read" cap can never
@@ -14,12 +14,17 @@ Formal shape (from the MCP-capability literature):
   * nonce     — unique id, so two otherwise-identical caps are distinguishable
                 and a capability can't be trivially replayed as another.
   * issuer    — who minted it (the Supervisor's id).
+  * subject   — the role it was issued TO. A cap is bound to its holder, so a
+                capability minted for one agent is worthless to another.
+  * max_uses  — how many calls it may authorize (None = unlimited within ttl).
+                The gate counts uses by nonce, so a single-use cap can't be replayed.
   * signature — Ed25519 signature binding ALL of the above to the issuer.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -36,6 +41,8 @@ class Capability:
     issued_at: float = field(default_factory=time.time)
     nonce: str = ""
     issuer: str = ""
+    subject: str = ""
+    max_uses: int | None = None
     signature: str | None = None
 
     # --- signing / verification ------------------------------------------- #
@@ -53,6 +60,8 @@ class Capability:
             "issued_at": self.issued_at,
             "nonce": self.nonce,
             "issuer": self.issuer,
+            "subject": self.subject,
+            "max_uses": self.max_uses,
         }
         return json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -75,13 +84,22 @@ class Capability:
 
         Supported rules per field: {"max": n}, {"min": n}, {"allow": [...]}.
         A field with no rule is unconstrained; a rule on a missing argument fails.
+        Bounds only apply to finite real numbers: NaN compares False against every
+        bound, so anything else is rejected outright rather than compared.
         """
         for field_name, rule in self.params.items():
             value = arguments.get(field_name)
             if "allow" in rule and value not in rule["allow"]:
                 return False, f"{field_name}={value!r} not in allowlist {rule['allow']}"
-            if "max" in rule and (value is None or float(value) > rule["max"]):
-                return False, f"{field_name}={value} exceeds max {rule['max']}"
-            if "min" in rule and (value is None or float(value) < rule["min"]):
-                return False, f"{field_name}={value} below min {rule['min']}"
+            if "max" in rule or "min" in rule:
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                ):
+                    return False, f"{field_name}={value!r} is not a finite number"
+                if "max" in rule and value > rule["max"]:
+                    return False, f"{field_name}={value} exceeds max {rule['max']}"
+                if "min" in rule and value < rule["min"]:
+                    return False, f"{field_name}={value} below min {rule['min']}"
         return True, ""

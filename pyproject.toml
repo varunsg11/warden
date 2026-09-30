@@ -45,9 +45,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/varunsg11/warden-agent-governance"
-Repository = "https://github.com/varunsg11/warden-agent-governance"
-Issues = "https://github.com/varunsg11/warden-agent-governance/issues"
+Homepage = "https://github.com/varunsg11/warden"
+Repository = "https://github.com/varunsg11/warden"
+Issues = "https://github.com/varunsg11/warden/issues"
 
 [project.scripts]
 warden = "warden.cli:main"

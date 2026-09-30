@@ -12,7 +12,7 @@ where each decision is made:
                   |
                [Summarizer] --(no tools)--> summary (carries the poison)
                   |
-             [Refund agent] --issue_refund?--> (GATE: 5 checks) --> DENY -> QUARANTINE
+             [Refund agent] --issue_refund?--> (GATE: 8 checks) --> DENY -> QUARANTINE
 
 Run it (offline, deterministic):
     warden trace                 # task=summarize (default)
@@ -28,7 +28,7 @@ from warden.governance.issuer import Supervisor
 from warden.llm import ToolCall, get_llm
 from warden.pipeline.agents import refund_node, retriever_node, summarizer_node
 from warden.pipeline.state import PipelineState
-from warden.pipeline.tools import TOOL_IMPLS, TOOL_SCOPES, reset_world
+from warden.pipeline.tools import TOOL_IMPLS, TOOL_SCOPES, TOOL_SPECS, reset_world
 
 USER_REQUEST = "Please summarize the recent notes on account 1234."
 ROLES = ["retriever", "summarizer", "refund_issuer"]
@@ -49,12 +49,18 @@ class TracingRunner:
 
     def execute(self, role: str, call: ToolCall) -> str:
         print(f"\n  >> {role} PROPOSES: {call.name}({call.arguments})")
-        required = TOOL_SCOPES[call.name]
+        required = TOOL_SCOPES.get(call.name, "")
+        spec = TOOL_SPECS.get(call.name)
         self.audit.record("tool_proposed", role=role, tool=call.name, arguments=call.arguments)
 
         # --- Stage 1: capability gate -------------------------------------- #
-        decision = self.gate.evaluate(
-            role, call.name, call.arguments, required, self.manifests.get(role, [])
+        decision = self.gate.check(
+            role,
+            call.name,
+            call.arguments,
+            required,
+            self.manifests.get(role, []),
+            arg_schema=spec.parameters if spec else None,
         )
         print(f"     Stage 1 - GATE (required scope: {required}):")
         for s in decision.steps:

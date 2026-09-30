@@ -60,3 +60,38 @@ def test_runner_quarantines_in_bounds_but_drifting_call():
         runner.execute("refund_issuer", call)
 
     assert tools.REFUNDS_ISSUED == []  # the refund never executed
+
+
+# --- hardening: watched features can't be hidden or dropped ---------------- #
+EMAIL_BASELINE = [
+    ("send_email", {"to": "alice@gmail.com"}),
+    ("send_email", {"to": "carol@yahoo.com"}),
+]
+
+
+@pytest.mark.parametrize(
+    "to",
+    [
+        "steal@evil.com, alice@gmail.com",  # attacker listed first
+        "alice@gmail.com, steal@evil.com",  # attacker listed last
+        "Alice Smith <steal@evil.com>",  # hidden behind a display name
+        "steal-at-evil.com",  # no parseable address at all
+        "",
+    ],
+)
+def test_email_exfil_evasions_are_drift(to):
+    r = DriftDetector().fit(EMAIL_BASELINE).check("send_email", {"to": to})
+    assert r.is_drift, f"to={to!r} was not flagged"
+
+
+def test_known_domains_normalize_and_pass():
+    detector = DriftDetector().fit(EMAIL_BASELINE)
+    for to in ["Frank <frank@Gmail.com>", "frank@gmail.com, judy@yahoo.com", "x@gmail.com."]:
+        assert not detector.check("send_email", {"to": to}).is_drift, to
+
+
+@pytest.mark.parametrize("amount", [float("nan"), float("inf"), None, "12", True])
+def test_non_finite_or_missing_amount_is_drift(amount):
+    r = _detector().check("issue_refund", {"account": "1234", "amount": amount})
+    assert r.is_drift
+    assert "non-finite" in r.reasons[0]

@@ -5,6 +5,7 @@
     warden drift                 the anomaly detector (second line of defense)
     warden trace [TASK] [--fake] narrated, step-by-step debug flow
     warden eval                  attack-containment + false-quarantine numbers
+    warden audit-verify FILE     check an audit log's hash chain on disk
 
 --fake uses the offline, deterministic model (no API key, no cost). It is also
 enabled by the WARDEN_FAKE_LLM=1 environment variable.
@@ -34,6 +35,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fake", action="store_true", help="use the offline deterministic model")
 
     sub.add_parser("eval", help="attack-containment + false-quarantine numbers (no LLM needed)")
+
+    p = sub.add_parser("audit-verify", help="check an audit log's hash chain on disk")
+    p.add_argument("path", help="path to an audit/<session>.jsonl file")
     return parser
 
 
@@ -64,6 +68,12 @@ def main(argv: list[str] | None = None) -> int:
         from warden.evaluation import harness
 
         harness.main()
+    elif args.command == "audit-verify":
+        from warden.governance.audit import AuditLog
+
+        ok, detail = AuditLog.verify_file(args.path)
+        print(f"{'OK' if ok else 'FAIL'}: {args.path}: {detail}")
+        return 0 if ok else 1
     return 0
 
 

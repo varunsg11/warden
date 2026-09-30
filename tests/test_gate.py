@@ -8,9 +8,16 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
+from warden.governance.audit import AuditLog
 from warden.governance.capability import Capability
-from warden.governance.gate import Gate
+from warden.governance.gate import Gate, GateViolation
 from warden.governance.issuer import Supervisor
+from warden.llm import ToolCall
+from warden.pipeline import tools
+from warden.pipeline.runner import GatedToolRunner
+from warden.pipeline.tools import TOOL_SPECS
 
 
 def _setup():
@@ -36,7 +43,7 @@ def test_allows_in_bounds_refund():
     assert d.allowed
 
 
-# --- the five denial modes -------------------------------------------------- #
+# --- the core denial modes --------------------------------------------------- #
 def test_denies_missing_capability():
     sup, gate = _setup()
     manifest = sup.issue_manifest("summarizer")  # summarizer gets nothing
@@ -76,6 +83,7 @@ def test_denies_tampered_signature():
         issued_at=cap.issued_at,
         nonce=cap.nonce,
         issuer=cap.issuer,
+        subject=cap.subject,
         signature=cap.signature,
     )
     d = gate.check(
@@ -95,6 +103,7 @@ def test_denies_expired_ttl():
         issued_at=time.time() - 60,
         nonce="n",
         issuer="s",
+        subject="refund_issuer",
     ).signed(sup.signer)  # validly signed, but issued a minute ago with 1s ttl
     d = gate.check(
         "refund_issuer", "issue_refund", {"account": "1234", "amount": 10.0}, "write", [stale]
@@ -112,6 +121,7 @@ def test_denies_scope_mismatch():
         ttl=30.0,
         nonce="n",
         issuer="s",
+        subject="refund_issuer",
     ).signed(sup.signer)
     d = gate.check(
         "refund_issuer", "issue_refund", {"account": "1234", "amount": 10.0}, "write", [read_only]
@@ -142,3 +152,102 @@ def test_denies_account_not_in_allowlist():
     )
     assert not d.allowed
     assert "allowlist" in d.reason
+
+
+# --- hardening: malformed arguments can't dodge the bounds ------------------ #
+REFUND_SCHEMA = TOOL_SPECS["issue_refund"].parameters
+
+
+@pytest.mark.parametrize(
+    "amount", [float("nan"), float("inf"), float("-inf"), True, "25", None, -5000.0, 0.0]
+)
+def test_denies_malformed_or_out_of_range_amount(amount):
+    """NaN compares False against every bound; strings/bools aren't amounts; a
+    negative refund charges the customer. None of these may pass -- with or
+    without the schema check in front of the envelope."""
+    sup, gate = _setup()
+    for schema in (REFUND_SCHEMA, None):
+        manifest = sup.issue_manifest("refund_issuer", "process_refund")
+        d = gate.check(
+            "refund_issuer",
+            "issue_refund",
+            {"account": "1234", "amount": amount},
+            "write",
+            manifest,
+            arg_schema=schema,
+        )
+        assert not d.allowed, f"amount={amount!r} allowed (schema={schema is not None})"
+
+
+def test_denies_unexpected_argument():
+    sup, gate = _setup()
+    manifest = sup.issue_manifest("refund_issuer", "process_refund")
+    d = gate.check(
+        "refund_issuer",
+        "issue_refund",
+        {"account": "1234", "amount": 10.0, "currency": "BTC"},
+        "write",
+        manifest,
+        arg_schema=REFUND_SCHEMA,
+    )
+    assert not d.allowed
+    assert "unexpected argument" in d.reason
+
+
+def test_denies_capability_borrowed_from_another_role():
+    sup, gate = _setup()
+    manifest = sup.issue_manifest("refund_issuer", "process_refund")
+    d = gate.check(
+        "summarizer", "issue_refund", {"account": "1234", "amount": 10.0}, "write", manifest
+    )
+    assert not d.allowed
+    assert "issued to 'refund_issuer'" in d.reason
+
+
+def test_single_use_capability_cannot_be_replayed():
+    sup, gate = _setup()
+    manifest = sup.issue_manifest("refund_issuer", "process_refund")
+    args = {"account": "1234", "amount": 49.0}
+    assert gate.check("refund_issuer", "issue_refund", args, "write", manifest).allowed
+    d = gate.check("refund_issuer", "issue_refund", args, "write", manifest)
+    assert not d.allowed
+    assert "already used" in d.reason
+
+
+def test_evaluate_does_not_consume_a_use():
+    sup, gate = _setup()
+    manifest = sup.issue_manifest("refund_issuer", "process_refund")
+    args = {"account": "1234", "amount": 10.0}
+    for _ in range(3):
+        assert gate.evaluate("refund_issuer", "issue_refund", args, "write", manifest).allowed
+    assert gate.check("refund_issuer", "issue_refund", args, "write", manifest).allowed
+
+
+def test_gate_error_fails_closed():
+    sup, gate = _setup()
+    manifest = sup.issue_manifest("refund_issuer", "process_refund")
+    d = gate.check("refund_issuer", "issue_refund", None, "write", manifest)  # type: ignore[arg-type]
+    assert not d.allowed
+    assert "gate error" in d.reason
+
+
+def test_runner_denies_unknown_tool_cleanly(tmp_path):
+    """A hallucinated/injected tool name is an audited DENY, not a KeyError."""
+    tools.reset_world()
+    sup, gate = _setup()
+    audit = AuditLog("unknown-tool", path=tmp_path / "a.jsonl")
+    runner = GatedToolRunner(gate, {"refund_issuer": []}, audit)
+    with pytest.raises(GateViolation):
+        runner.execute("refund_issuer", ToolCall(name="wire_transfer", arguments={"to": "x"}))
+    assert [r["event"] for r in audit.records] == ["tool_proposed", "gate_decision", "quarantine"]
+
+
+def test_runner_denies_string_amount_without_crashing():
+    tools.reset_world()
+    sup, gate = _setup()
+    manifests = {"refund_issuer": sup.issue_manifest("refund_issuer", "process_refund")}
+    runner = GatedToolRunner(gate, manifests)
+    call = ToolCall(name="issue_refund", arguments={"account": "1234", "amount": "abc"})
+    with pytest.raises(GateViolation):
+        runner.execute("refund_issuer", call)
+    assert tools.REFUNDS_ISSUED == []

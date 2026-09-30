@@ -1,0 +1,37 @@
+# Warden policy for the toy bank MCP server (examples/mcp_bank/server.py).
+# Validate with:  warden policy check examples/mcp_bank/policy.toml
+
+default_task = "view"
+
+[tools]
+read_statement = "read"
+get_balance = "read"
+send_money = "write"
+close_account = "write"   # declared so it can be governed; no task grants it
+
+# Read-only: look at the account.
+[[tasks.view.mcp-client]]
+tool = "read_statement"
+scope = "read"
+
+[[tasks.view.mcp-client]]
+tool = "get_balance"
+scope = "read"
+
+# Pay rent: reads, plus ONE payment of at most 1500 to a recipient the operator
+# named in --trusted text. The attacker's IBAN appears only in the (untrusted)
+# statement, so a payment to it is denied by provenance.
+[[tasks.pay_rent.mcp-client]]
+tool = "read_statement"
+scope = "read"
+
+[[tasks.pay_rent.mcp-client]]
+tool = "get_balance"
+scope = "read"
+
+[[tasks.pay_rent.mcp-client]]
+tool = "send_money"
+scope = "write"
+max_uses = 1
+params.amount = { min = 0.01, max = 1500.0 }
+params.recipient = { from = "trusted" }

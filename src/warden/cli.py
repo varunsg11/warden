@@ -7,6 +7,8 @@
     warden eval                  attack-containment + false-quarantine numbers
     warden audit-verify FILE     check an audit log's hash chain on disk
     warden policy check FILE     validate a policy file and show what it grants
+    warden mcp-proxy --policy P --task T [--trusted TEXT] -- CMD...
+                                 govern an MCP tool server (needs the `mcp` extra)
 
 --fake uses the offline, deterministic model (no API key, no cost). It is also
 enabled by the WARDEN_FAKE_LLM=1 environment variable.
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -44,6 +47,15 @@ def _build_parser() -> argparse.ArgumentParser:
     policy_sub = p.add_subparsers(dest="policy_command", required=True)
     pc = policy_sub.add_parser("check", help="validate a policy file and show what it grants")
     pc.add_argument("path", help="path to a policy .toml file")
+
+    p = sub.add_parser("mcp-proxy", help="govern an MCP tool server (needs the `mcp` extra)")
+    p.add_argument("--policy", required=True, help="policy .toml file")
+    p.add_argument("--task", required=True, help="the task this session is declared for")
+    p.add_argument(
+        "--trusted", default="", help='trusted text that satisfies `from = "trusted"` rules'
+    )
+    p.add_argument("--audit-dir", default="audit", help="where to write the audit log")
+    p.add_argument("upstream", nargs=argparse.REMAINDER, help="-- then the upstream server command")
     return parser
 
 
@@ -82,6 +94,32 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if ok else 1
     elif args.command == "policy":
         return _policy_check(args.path)
+    elif args.command == "mcp-proxy":
+        return _mcp_proxy(args)
+    return 0
+
+
+def _mcp_proxy(args: argparse.Namespace) -> int:
+    # Drop only the separator; the upstream command may take its own `--` arguments.
+    upstream = args.upstream[1:] if args.upstream[:1] == ["--"] else args.upstream
+    if not upstream:
+        print("error: give the upstream server command after --", file=sys.stderr)
+        return 2
+    try:
+        import anyio
+
+        from warden.integrations.mcp_proxy import serve
+    except ImportError:
+        print(
+            'error: the MCP gateway needs the extra: pip install "warden-agent-governance[mcp]"',
+            file=sys.stderr,
+        )
+        return 2
+    anyio.run(
+        lambda: serve(
+            args.policy, args.task, upstream, trusted=args.trusted, audit_dir=args.audit_dir
+        )
+    )
     return 0
 
 

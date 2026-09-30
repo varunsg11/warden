@@ -46,6 +46,8 @@ dev = [
 # Benchmark Warden on AgentDojo (experiments/agentdojo). Use a separate venv:
 # agentdojo pins its own openai/pydantic versions.
 agentdojo = ["agentdojo==0.1.35"]
+# The MCP gateway: `warden mcp-proxy` (src/warden/integrations/mcp_proxy.py).
+mcp = ["mcp>=2.2"]
 
 [project.urls]
 Homepage = "https://github.com/varunsg11/warden"

@@ -1050,7 +1050,7 @@
    ],
    "denials_clean": {},
    "denials_attacked": {
-    "capability_present": 135,
+    "capability_present": 123,
     "provenance_ok": 4
    },
    "clean": {

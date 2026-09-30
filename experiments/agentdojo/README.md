@@ -29,19 +29,35 @@ py -3.12 -m venv .venv-agentdojo            # python3.12 -m venv on macOS/Linux
 # Full: all suites, 3 reps per config
 .venv-agentdojo/Scripts/python experiments/agentdojo/run.py --model gpt-4o-mini-2024-07-18 \
     --config all --reps 3
+# On a budget: several configs, chosen suites, a hard spending cap
+.venv-agentdojo/Scripts/python experiments/agentdojo/run.py --model gpt-4o-mini-2024-07-18 \
+    --config task+prov,task --suites banking,slack --resume --max-usd 1.00
 
 .venv-agentdojo/Scripts/python experiments/agentdojo/summarize.py   # -> results/agentdojo/README.md
 .venv-agentdojo/Scripts/python -m pytest tests/test_agentdojo_adapter.py
 ```
 
-On Windows, `experimentsgentdojoun_real.cmd` runs the three headline configs
+On Windows, `experiments\agentdojo\run_real.cmd` runs the three headline configs
 (`none`, `task`, `task+prov`) one after another with `--resume`, then regenerates the
 summary; progress goes to `results/agentdojo/logs/realrun.log`. Re-run it after any
 interruption: finished episodes are reused, not re-paid.
 
 A real-model config covers 97 clean episodes, 949 attacked episodes, and 35 episodes
 where AgentDojo runs each injection task as a user task to check it's solvable. That's
-about 1,080 episodes per config per rep.
+about 1,080 episodes per config per rep; workspace is 560 of the 949 attacked pairs and
+most of the cost.
+
+`--max-usd` meters the token usage OpenAI reports on every response and stops before a
+call that could cross the cap (prices default to gpt-4o-mini's, `--price-in`/`--price-out`
+per 1M tokens). Out-of-credit errors are not retried. Stopping keeps every finished
+episode, and `--resume` picks up from there. The published gpt-4o-mini run used this:
+`none` on all four suites, then `task` and `task+prov` on banking and slack (the two
+suites the undefended model was most vulnerable on) under a $1 cap.
+
+Denial counts in the raw JSON are read from the episode logs, so resumed episodes count
+too. AgentDojo re-runs an episode (up to three times) when the agent ends without a
+final answer and logs only the last attempt; denials in the discarded attempts aren't
+counted.
 
 ## Configurations
 
@@ -51,6 +67,7 @@ about 1,080 episodes per config per rep.
 | `suite` | Every suite tool granted, unconstrained (lower bound for Warden) |
 | `task` | **Headline.** Each prompt declares a workflow ([`policies/`](policies/)) that grants all read tools plus only the write tools it needs |
 | `oracle` | Exactly the tools in each task's ground truth (upper bound for tool-level least privilege, not deployable) |
+| `task+prov` | `task`, plus provenance: destination and credential arguments (the `[provenance]` list in each suite's policy) must appear in the user's prompt, not only in tool output |
 
 The `task` mapping was written from the prompt text alone, as an app would declare its
 workflow at launch. Disclosure: the author saw banking's ground truth while building the
@@ -86,10 +103,10 @@ resistance at all. It's the worst case, and real models fall for fewer attacks.
 
 ## Known limits of tool-level least privilege
 
-This is what Phase 3 (provenance tracking) targets.
-
 - **In-envelope attacks:** a task that legitimately needs `send_money` can be steered
   into sending money to the attacker (`tests/test_agentdojo_adapter.py` pins this down).
+  Provenance (`task+prov`) is what closes this, at a utility cost where legitimate
+  values come from tool output (slack's users and URLs).
 - **Read-only attacks:** slack `injection_task_3` only makes the agent *visit* a URL,
   and travel `injection_task_6` only makes it *say* something. Neither needs a write
   tool, so no tool-level policy can stop them.

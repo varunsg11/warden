@@ -111,8 +111,10 @@ go through exactly the same checks.
 **AgentDojo** (all four suites; [`results/agentdojo`](../results/agentdojo/README.md)).
 With a scripted agent that falls for every injection it reads (the worst case), attack
 success is 94.9% undefended, **23.5%** with per-task capabilities at unchanged utility
-(99.0%), and **3.8%** with provenance added, at 76.3% utility. Real-model results are in
-the same table.
+(99.0%), and **3.8%** with provenance added, at 76.3% utility. With gpt-4o-mini on
+banking and slack, the suites it was most vulnerable on, attack success is 55.4%
+undefended, **16.9%** with per-task capabilities (utility unchanged at 67.6%) and
+**0.8%** with provenance (utility 37.8%).
 
 **In-house suite** ([`warden/evaluation/`](../src/warden/evaluation/), `warden eval`):
 17/17 attacks contained (the ungated baseline contains none) with a 2/26 false-quarantine

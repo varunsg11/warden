@@ -32,6 +32,7 @@ import json
 import subprocess
 import time
 import tomllib
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -137,6 +138,53 @@ def build_policy(config: str, suite: Any, spec: dict) -> tuple[Policy, Callable[
     return policy, declare
 
 
+class BudgetExceeded(RuntimeError):
+    """Raised before a model call that would start once the budget is spent."""
+
+
+class Budget:
+    """Hard spending cap computed from the token usage OpenAI reports on every
+    response (not an estimate). Prices are $ per 1M tokens -- check them against
+    the provider's current price list; cached-input discounts are ignored, so the
+    meter errs high."""
+
+    def __init__(self, max_usd: float | None, price_in: float, price_out: float) -> None:
+        self.max_usd = max_usd
+        self.price_in = price_in / 1e6
+        self.price_out = price_out / 1e6
+        self.spent = 0.0
+        self.calls = 0
+        self.largest_call = 0.002  # reserve at least this much for the next call
+
+    def meter(self, client: Any) -> None:
+        """Wrap client.chat.completions.create so every call is checked and counted."""
+        completions = client.chat.completions
+        create = completions.create
+
+        def metered_create(*args: Any, **kwargs: Any) -> Any:
+            # Reserve room for a call as large as the largest seen so far, so the
+            # next call can't push spend past the cap.
+            if self.max_usd is not None and self.spent + self.largest_call > self.max_usd:
+                raise BudgetExceeded(
+                    f"budget ${self.max_usd:.2f} reached (spent ${self.spent:.4f})"
+                )
+            response = create(*args, **kwargs)
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                cost = (
+                    usage.prompt_tokens * self.price_in + usage.completion_tokens * self.price_out
+                )
+                self.spent += cost
+                self.largest_call = max(self.largest_call, cost)
+            self.calls += 1
+            return response
+
+        completions.create = metered_create
+
+
+BUDGET = Budget(None, 0.15, 0.60)
+
+
 class RetryingLLM(BasePipelineElement):
     """Retries the wrapped LLM element on rate limits and transient API errors,
     with exponential backoff. A retry re-sends the identical request, so it
@@ -160,7 +208,11 @@ class RetryingLLM(BasePipelineElement):
             try:
                 return self.llm.query(*args, **kwargs)
             except retryable as exc:
-                if attempt == self.attempts - 1:
+                # Out of credit is not transient: retrying would only burn time.
+                if (
+                    getattr(exc, "code", None) == "insufficient_quota"
+                    or attempt == self.attempts - 1
+                ):
                     raise
                 delay = min(60.0, 2.0**attempt)
                 print(f"    [retry {attempt + 1}] {type(exc).__name__}; sleeping {delay:.0f}s")
@@ -175,7 +227,9 @@ def build_pipeline(
         llm: Any = ScriptedAgent(suite, name=f"{SCRIPTED_TARGET}-scripted")
         base_name = f"{SCRIPTED_TARGET}-scripted"
     else:
-        llm = RetryingLLM(get_llm("openai", model, None, "tool"))
+        inner = get_llm("openai", model, None, "tool")
+        BUDGET.meter(inner.client)
+        llm = RetryingLLM(inner)
         base_name = model
 
     system = SystemMessage(load_system_message(None))
@@ -216,6 +270,43 @@ def scripted_unperformable(suite: Any) -> list[str]:
         for tid, task in suite.injection_tasks.items()
         if not task.ground_truth(env.model_copy(deep=True))
     )
+
+
+# The gate's denial reason (governance/gate.py, pipeline/runner.py) -> the check that failed.
+DENIAL_REASONS = {
+    "session is quarantined": "quarantined",
+    "holds no capability": "capability_present",
+    "malformed arguments": "args_well_formed",
+    "invalid signature": "signature_valid",
+    "was issued to": "bound_to_role",
+    "has expired": "not_expired",
+    "scope mismatch": "scope_ok",
+    "parameter constraint violated": "params_ok",
+    "untrusted provenance": "provenance_ok",
+    "already used": "uses_remaining",
+    "gate error": "gate_error",
+}
+
+
+def denials_in_logs(paths: list[Path]) -> dict[str, int]:
+    """Count Warden denials by the check that failed, read from AgentDojo episode logs.
+
+    Read from the logs rather than counted live, so episodes reused by --resume count
+    too. A denial is a tool result whose error starts with "Blocked by Warden: ";
+    anything that isn't a gate reason is a drift denial. The earliest phrase wins,
+    since a reason can quote argument values (attacker text) after its own phrase.
+    """
+    counts: Counter[str] = Counter()
+    for path in paths:
+        if not path.exists():
+            continue
+        for message in json.loads(path.read_text(encoding="utf-8"))["messages"]:
+            error = message.get("error") or ""
+            if message.get("role") != "tool" or not error.startswith("Blocked by Warden: "):
+                continue
+            hits = [(error.find(r), c) for r, c in DENIAL_REASONS.items() if r in error]
+            counts[min(hits)[1] if hits else "drift"] += 1
+    return dict(sorted(counts.items()))
 
 
 def _mean(values: Any) -> float:
@@ -264,9 +355,6 @@ def run_one(args: argparse.Namespace, config: str, rep: int, all_suites: dict) -
             clean = benchmark_suite_without_injections(
                 pipeline, suite, logdir, not args.resume, user_tasks, BENCHMARK_VERSION
             )
-            clean_denials = dict(warden.denials) if warden else {}
-            if warden:
-                warden.denials.clear()
             attack = load_attack(args.attack, suite, pipeline)
             attacked = benchmark_suite_with_injections(
                 pipeline,
@@ -284,6 +372,17 @@ def run_one(args: argparse.Namespace, config: str, rep: int, all_suites: dict) -
             f"{u}|{i}": [attacked["utility_results"][(u, i)], attacked["security_results"][(u, i)]]
             for (u, i) in attacked["utility_results"]
         }
+        # Episode logs, where AgentDojo writes them. The injection tasks run as user
+        # tasks (the solvability check) happen in the attacked phase.
+        episodes = logdir / str(pipeline.name) / suite_name
+        clean_logs = [episodes / u / "none" / "none.json" for (u, _) in clean["utility_results"]]
+        attacked_logs = [
+            *(
+                episodes / i / "none" / "none.json"
+                for i in attacked["injection_tasks_utility_results"]
+            ),
+            *(episodes / u / attack.name / f"{i}.json" for (u, i) in attacked["utility_results"]),
+        ]
         record["suites"][suite_name] = {
             "utility": _mean(clean["utility_results"].values()),
             "utility_under_attack": _mean(attacked["utility_results"].values()),
@@ -292,8 +391,8 @@ def run_one(args: argparse.Namespace, config: str, rep: int, all_suites: dict) -
             "n_user_tasks": len(clean["utility_results"]),
             "n_pairs": len(pairs),
             "excluded_injection_tasks": excluded,
-            "denials_clean": clean_denials,
-            "denials_attacked": dict(warden.denials) if warden else {},
+            "denials_clean": denials_in_logs(clean_logs) if warden else {},
+            "denials_attacked": denials_in_logs(attacked_logs) if warden else {},
             "clean": {u: ok for (u, _), ok in clean["utility_results"].items()},
             "pairs": pairs,
         }
@@ -304,6 +403,7 @@ def run_one(args: argparse.Namespace, config: str, rep: int, all_suites: dict) -
         )
 
     record["meta"]["duration_s"] = round(time.time() - started, 1)
+    record["meta"]["api_usd_metered_so_far"] = round(BUDGET.spent, 4)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(record, indent=1), encoding="utf-8")
     print(f"\nwrote {out.relative_to(ROOT)}")
@@ -322,7 +422,9 @@ def _git_commit() -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--model", default="scripted")
-    parser.add_argument("--config", default="task", choices=[*CONFIGS, "all"])
+    parser.add_argument(
+        "--config", default="task", help=f"one of {', '.join(CONFIGS)}, a comma list, or all"
+    )
     parser.add_argument("--suites", default=",".join(SUITES))
     parser.add_argument("--attack", default="important_instructions")
     parser.add_argument("--on-deny", default="quarantine", choices=["quarantine", "error"])
@@ -330,6 +432,11 @@ def main() -> None:
     parser.add_argument("--user-tasks", default="", help="comma-separated subset (smoke tests)")
     parser.add_argument("--injection-tasks", default="", help="comma-separated subset")
     parser.add_argument("--audit", action="store_true", help="write a Warden audit log per episode")
+    parser.add_argument(
+        "--max-usd", type=float, default=None, help="hard cap on API spend for this invocation"
+    )
+    parser.add_argument("--price-in", type=float, default=0.15, help="$ per 1M input tokens")
+    parser.add_argument("--price-out", type=float, default=0.60, help="$ per 1M output tokens")
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -344,10 +451,23 @@ def main() -> None:
     if args.model != "scripted":
         load_dotenv(ROOT / ".env")
     all_suites = get_suites(BENCHMARK_VERSION)
-    configs = CONFIGS if args.config == "all" else (args.config,)
-    for rep in range(args.reps):
-        for config in configs:
-            run_one(args, config, rep, all_suites)
+    configs = CONFIGS if args.config == "all" else tuple(c for c in args.config.split(",") if c)
+    unknown = set(configs) - set(CONFIGS)
+    if unknown:
+        raise SystemExit(f"unknown config(s) {sorted(unknown)}; choose from {CONFIGS}")
+    BUDGET.max_usd = args.max_usd
+    BUDGET.price_in, BUDGET.price_out = args.price_in / 1e6, args.price_out / 1e6
+    try:
+        for rep in range(args.reps):
+            for config in configs:
+                run_one(args, config, rep, all_suites)
+    except BudgetExceeded as exc:
+        print(f"\nSTOPPED: {exc}. Finished episodes are kept; rerun with --resume to continue.")
+    finally:
+        if args.model != "scripted":
+            print(
+                f"\nAPI usage this invocation: {BUDGET.calls} calls, ${BUDGET.spent:.4f} (metered)"
+            )
 
 
 if __name__ == "__main__":

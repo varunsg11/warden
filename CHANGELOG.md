@@ -6,6 +6,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Real-model AgentDojo results** (gpt-4o-mini, `important_instructions`). Undefended
+  on all four suites: 29.5% attack success. On banking + slack, attack success falls
+  from 55.4% to 16.9% with per-task capabilities (utility unchanged at 67.6%) and to
+  0.8% with provenance (utility 37.8%). Written up in `docs/REPORT.md` §4.3.
+- `experiments/agentdojo/run.py --max-usd`: a hard API spending cap, metered from the
+  token usage OpenAI reports on each response (`--price-in` / `--price-out`); the run
+  stops cleanly and `--resume` continues it. Out-of-credit errors aren't retried.
+- `--config` takes a comma-separated list.
+
+### Fixed
+- Denial counts in AgentDojo raw results are now read from the episode logs. They were
+  counted live, so episodes reused by `--resume` contributed none, and AgentDojo's
+  discarded retry attempts (it re-runs an episode with no final answer) were counted.
+  Every Warden raw file was recounted from its logs; no utility or attack-success
+  number changed.
+- `summarize.py` compares configs over the suites they share, so a run on a subset of
+  suites is reported instead of silently dropped.
+- `experiments/agentdojo/README.md`: the `run_real.cmd` path had been corrupted into
+  control characters.
+
 ## [0.2.0] - 2026-09-30
 
 Headline: evaluated on AgentDojo (all four suites). Against an always-fooled

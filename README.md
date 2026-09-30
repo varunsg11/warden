@@ -24,8 +24,20 @@ Text can talk a model into anything, but it can't talk an `if` statement into an
 
 The scripted "always-fooled" agent carries out every injection it reads. That makes
 it a worst case that measures what the policy alone contains, independent of how
-gullible a particular model is. Real-model (gpt-4o-mini) results are in the
-[results table](results/agentdojo/README.md).
+gullible a particular model is.
+
+**With a real model** (gpt-4o-mini, banking + slack, the two suites it was most
+vulnerable on; one repetition):
+
+| | Attack success ↓ | Utility (no attack) |
+|---|---|---|
+| gpt-4o-mini, no defense | 55.4% | 67.6% |
+| … + Warden, per-task capabilities | **16.9%** | **67.6%** |
+| … + Warden, per-task + provenance | **0.8%** | 37.8% |
+
+Same pattern as the worst case: per-task capabilities cut attack success by about 70% at no
+utility cost, and provenance blocks nearly everything left (banking 0.0%) but costs
+utility, mostly on slack, whose tasks take users and URLs from messages and web pages.
 
 Also included:
 - **MCP gateway:** `warden mcp-proxy` puts the gate in front of *any* MCP tool server.
@@ -188,8 +200,17 @@ in [experiments/agentdojo](experiments/agentdojo/README.md).
   the agent *says*.
 - **Provenance costs utility.** A task that legitimately takes a recipient from a
   document, such as "pay the bill in bill.txt", is denied too. On AgentDojo that drops
-  utility from 99% to 76%, mostly in the slack suite. The fix is a trusted source for
-  those values, such as a contacts service, not a weaker check.
+  utility from 99% to 76% for the scripted agent, and from 68% to 38% for gpt-4o-mini
+  (slack: 76% to 29%). The fix is a trusted source for those values, such as a contacts
+  service, not a weaker check.
+- **Quarantine ends tasks.** Stopping the session at the first denial is the safe
+  default, but a blocked injection also ends the user's task: with gpt-4o-mini, utility
+  under attack falls from 48% to 32% with per-task capabilities. Error mode (return the
+  denial to the agent) keeps working; on the scripted agent it lifts utility under
+  attack from 54% to 91% at nearly the same attack success.
+- **Evaluation scope.** One attack family (`important_instructions`). The real-model
+  numbers are one repetition on two suites; the undefended baseline also covers all four
+  (29.5% attack success).
 - **False positives** come from provenance (above) and from drift (legitimate but
   unusual calls). The `warden eval` suite keeps two of the latter on purpose.
 - **Provenance is textual,** a deterministic approximation of taint tracking. It matches

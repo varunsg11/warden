@@ -15,7 +15,10 @@ requires sensitive arguments, such as recipients, accounts and URLs, to come fro
 user's request and not from tool output. On AgentDojo, against a scripted agent that
 carries out every injection it reads, attack success falls from 94.9% to 23.5% with
 per-task capabilities, at unchanged utility (99.0%), and to 3.8% with provenance, at a
-utility cost (76.3%). The full enforcement path costs about 1 ms per call. Warden ships
+utility cost (76.3%). With gpt-4o-mini on AgentDojo's banking and slack suites, attack
+success falls from 55.4% to 16.9% with per-task capabilities (utility unchanged at
+67.6%) and to 0.8% with provenance (utility 37.8%). The full enforcement path costs
+about 1 ms per call. Warden ships
 as a Python library, an AgentDojo defense and an MCP gateway.
 
 ## 1. Problem and threat model
@@ -134,13 +137,37 @@ What the results show:
 
 ### 4.3 Real model (gpt-4o-mini)
 
-*In progress.* The gpt-4o-mini runs of `none`, `task` and `task+prov` (one repetition,
-all four suites, about 1,080 episodes each) are running. Their numbers go into
-[`results/agentdojo/README.md`](../results/agentdojo/README.md) and into this section
-when they finish. A two-task smoke run confirmed the real-model path end to end. In
-that run the model's own mistakes, such as wrong arithmetic in a final answer, show up
-as lost utility with no Warden denial involved. The `none` baseline exists to measure
-exactly that.
+The undefended baseline (`none`) ran on all four suites: utility 74.2%, attack success
+29.5% (workspace 17.7%, travel 30.7%, banking 50.0%, slack 62.9%). A real model resists
+many injections the scripted agent falls for, so the question is what Warden adds where
+the model *is* vulnerable. On a $1 API budget, `task` and `task+prov` ran on the two
+most vulnerable suites, banking and slack (37 user tasks, 249 attacked pairs, one
+repetition):
+
+| Configuration | Utility | Utility under attack | Attack success | banking | slack |
+|---|---|---|---|---|---|
+| no defense | 67.6% | 47.8% | 55.4% | 50.0% | 62.9% |
+| **Warden, per-task** | **67.6%** | 31.7% | **16.9%** | 15.3% | 19.0% |
+| **Warden, per-task + provenance** | 37.8% | 24.1% | **0.8%** | 0.0% | 1.9% |
+
+The real model reproduces the worst-case pattern of §4.2:
+1. **Per-task capabilities cost no clean utility** (67.6% either way; banking even
+   rises from 56.2% to 62.5%, within one repetition's noise) and cut attack success by
+   about 70%. Under attack, 134 of the per-task config's 135 first denials (the call
+   that quarantined the session) failed `capability_present`, the other
+   `args_well_formed`: the injected action needed a tool the declared task never granted.
+2. **The residue is in-envelope again,** and provenance removes it: 99 calls failed
+   `provenance_ok`, and the two attacks that still succeeded are both in slack.
+3. **Provenance costs what it cost the scripted agent on these suites.** Slack utility
+   falls from 76.2% to 28.6% (scripted: 33.3%) and banking loses 12.5 points (scripted:
+   also 12.5). Slack tasks look up users and URLs in channels and web pages, and
+   provenance can't tell those reads from injected values.
+4. **Quarantine costs utility under attack** (47.8% → 31.7% per-task): the session ends
+   at the first blocked call, taking the user's task with it. Error mode avoids most of
+   that for the scripted agent (§4.2, point 4); it wasn't run on the real model.
+
+Model mistakes, such as wrong arithmetic in a final answer, appear as lost utility with
+no Warden denial involved; the `none` row measures that floor.
 
 ### 4.4 In-house suite
 
@@ -184,6 +211,9 @@ The full path is about 0.2% of a 500 ms LLM call. Audit appends account for most
   rewrite the whole file can recompute the chain. Anchoring the head hash off-host is
   future work.
 - **Evaluation scope.** One attack family, one model, one repetition per configuration.
+  The real-model Warden configs cover banking and slack only (workspace and travel were
+  cut to fit a $1 budget), so small differences, like banking's utility gain, are within
+  noise.
 
 ## 7. Related work
 
@@ -204,7 +234,9 @@ The full path is about 0.2% of a 500 ms LLM call. Audit appends account for most
 All numbers come from committed code and raw JSON:
 - **Scripted runs:** `experiments/agentdojo/run.py --model scripted --config all` ($0,
   deterministic).
-- **Real-model runs:** the same with `--model gpt-4o-mini-2024-07-18` (resumable).
+- **Real-model runs:** the same with `--model gpt-4o-mini-2024-07-18` (resumable);
+  §4.3 used `--config none`, then `--config task+prov,task --suites banking,slack
+  --max-usd 1.00`. Finished episodes are reused on `--resume`, so re-running is free.
 - **Tables:** regenerate with `summarize.py`.
 - **In-house suite:** `warden eval`.
 - **Overhead:** `warden bench`.

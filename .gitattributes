@@ -19,3 +19,6 @@ Dockerfile text eol=lf
 *.jpg binary
 *.gif binary
 *.ico binary
+# Windows batch files need CRLF line endings to run reliably in cmd.exe
+*.cmd text eol=crlf
+*.bat text eol=crlf

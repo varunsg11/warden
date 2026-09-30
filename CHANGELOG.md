@@ -24,6 +24,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Drift fails closed** on a missing / unparseable / non-finite watched feature.
 
 ### Added
+- **Policy files** — policies are TOML (`src/warden/policies/default.toml`), loaded by
+  `governance/policy_loader.py` with strict validation (unknown keys, unenforceable rules,
+  impossible scopes, bad bounds are load-time errors). `Supervisor(policy=...)` accepts a
+  custom policy; `warden policy check <file>` validates and prints the grants.
 - `warden audit-verify <file>` and `AuditLog.verify_file()` — verify a log on disk,
   including detection of a truncated tail (missing `session_end`).
 - Four evasion cases in the eval suite (15 attacks total, all contained).

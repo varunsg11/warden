@@ -84,8 +84,9 @@ check every proposed tool call before you execute it:
 
 ```python
 from warden import Supervisor, Gate
+from warden.governance.policy_loader import load_policy
 
-supervisor = Supervisor()
+supervisor = Supervisor(policy=load_policy("my_policy.toml"))  # omit for the bundled default
 gate = Gate(supervisor.verifier)  # holds only the public key
 manifest = supervisor.issue_manifest("refund_issuer", task="process_refund")
 
@@ -104,11 +105,37 @@ else:
     ...  # quarantine; decision.reason explains exactly why
 ```
 
+### Policy files
+
+Authority is declared in a TOML file: which tools exist and the scope each needs, and,
+per task and role, the capabilities granted. The bundled default is
+[`src/warden/policies/default.toml`](src/warden/policies/default.toml):
+
+```toml
+[tools]
+issue_refund = "write"
+
+[[tasks.process_refund.refund_issuer]]
+tool = "issue_refund"
+scope = "write"
+max_uses = 1                                   # single-use: can't be replayed
+params.amount  = { min = 0.01, max = 50.0 }
+params.account = { allow = ["1234", "5678", "4321"] }
+```
+
+Validation is strict: an unknown key, an unenforceable rule, or a scope that could
+never pass the gate is a load-time error, never a silently ignored restriction.
+
+```bash
+warden policy check my_policy.toml   # validate + print what each task/role is granted
+```
+
 ## Project layout
 
 ```
 src/warden/
-  governance/     capability · signing · policy · issuer · gate · drift · audit  (no LLM)
+  governance/     capability · signing · policy(+loader) · issuer · gate · schema · drift · audit  (no LLM)
+  policies/       default.toml — the bundled policy
   pipeline/       tools · agents · state · graph · runner                        (untrusted)
   corpus/docs/    clean documents + the poisoned ticket
   demos/          baseline · governed · drift · trace

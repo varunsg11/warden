@@ -15,49 +15,33 @@ Read the difference:
                              the capability to do it was never handed out.
   * task "process_refund" -> refund_issuer may issue ONE refund per turn, between
                              $0.01 and $50, only to the customer's known accounts.
+
+The policy itself lives in a data file, `warden/policies/default.toml`, loaded
+and strictly validated by `policy_loader`. Supply your own with
+`Supervisor(policy=load_policy("my_policy.toml"))`.
 """
 
 from __future__ import annotations
 
+import tomllib
+from importlib.resources import files
 from typing import Any
 
-_READ_DOCS = {"tool": "search_docs", "scope": "read", "params": {}, "ttl": 30.0}
+from warden.governance.policy_loader import Policy, parse_policy
 
-_CONSTRAINED_REFUND = {
-    "tool": "issue_refund",
-    "scope": "write",
-    "params": {
-        "amount": {"min": 0.01, "max": 50.0},  # small, positive refunds only
-        "account": {"allow": ["1234", "5678", "4321"]},  # the customer's known accounts
-    },
-    "ttl": 30.0,
-    "max_uses": 1,  # one refund per turn: the cap can't be replayed for 50 more
-}
+_DEFAULT_FILE = files("warden").joinpath("policies/default.toml")
 
-# send_email can't be tightly param-constrained -- you can't allowlist every
-# legitimate recipient. So the gate permits it broadly and DRIFT watches the
-# destination domain. This is the division of labour between the two defenses.
-_SEND_EMAIL = {"tool": "send_email", "scope": "write", "params": {}, "ttl": 30.0}
+
+def _load_default() -> Policy:
+    return parse_policy(tomllib.loads(_DEFAULT_FILE.read_text(encoding="utf-8")), "default.toml")
+
+
+DEFAULT_POLICY: Policy = _load_default()
 
 # task -> role -> list of capability templates
-POLICY: dict[str, dict[str, list[dict[str, Any]]]] = {
-    "summarize": {
-        "retriever": [_READ_DOCS],
-        "summarizer": [],
-        "refund_issuer": [],  # <-- no write authority for a read-only task
-    },
-    "process_refund": {
-        "retriever": [_READ_DOCS],
-        "summarizer": [],
-        "refund_issuer": [_CONSTRAINED_REFUND],
-    },
-    "reply_to_customer": {
-        "responder": [_SEND_EMAIL],
-    },
-}
-
-DEFAULT_TASK = "summarize"
+POLICY: dict[str, dict[str, list[dict[str, Any]]]] = DEFAULT_POLICY.tasks
+DEFAULT_TASK: str = DEFAULT_POLICY.default_task
 
 
 def templates_for(task: str, role: str) -> list[dict[str, Any]]:
-    return POLICY.get(task, {}).get(role, [])
+    return DEFAULT_POLICY.templates_for(task, role)

@@ -61,7 +61,9 @@ arrow; it can't touch the top one.
 1. **Capability manifest + Supervisor** — before each turn, the Supervisor mints a set
    of Ed25519-signed capabilities for each role, scoped to the declared task.
    `c = (tool, params, scope, ttl, nonce, issuer, subject, max_uses, signature)`.
-   [`issuer.py`](../src/warden/governance/issuer.py), [`capability.py`](../src/warden/governance/capability.py), [`policy.py`](../src/warden/governance/policy.py).
+   [`issuer.py`](../src/warden/governance/issuer.py), [`capability.py`](../src/warden/governance/capability.py), [`policy.py`](../src/warden/governance/policy.py), with the policy itself in a strictly
+   validated TOML file ([`policies/default.toml`](../src/warden/policies/default.toml),
+   [`policy_loader.py`](../src/warden/governance/policy_loader.py)).
 
 2. **Enforcement gate** — intercepts every proposed call and runs eight deterministic
    checks (capability present, arguments well-formed, valid signature, bound to the

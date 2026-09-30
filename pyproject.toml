@@ -57,7 +57,7 @@ where = ["src"]
 include = ["warden*"]
 
 [tool.setuptools.package-data]
-warden = ["py.typed", "corpus/docs/*.txt"]
+warden = ["py.typed", "corpus/docs/*.txt", "policies/*.toml"]
 
 # --------------------------------------------------------------------------- #
 # Tooling

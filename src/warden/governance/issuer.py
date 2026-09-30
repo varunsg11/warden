@@ -12,19 +12,27 @@ from __future__ import annotations
 import uuid
 
 from warden.governance.capability import Capability
-from warden.governance.policy import DEFAULT_TASK, templates_for
+from warden.governance.policy import DEFAULT_POLICY
+from warden.governance.policy_loader import Policy
 from warden.governance.signing import Signer, Verifier
 
 
 class Supervisor:
-    def __init__(self, signer: Signer | None = None, issuer_id: str = "warden-supervisor") -> None:
+    def __init__(
+        self,
+        signer: Signer | None = None,
+        issuer_id: str = "warden-supervisor",
+        policy: Policy | None = None,
+    ) -> None:
         self.signer = signer or Signer()
         self.issuer_id = issuer_id
+        self.policy = policy or DEFAULT_POLICY
 
-    def issue_manifest(self, role: str, task: str = DEFAULT_TASK) -> list[Capability]:
+    def issue_manifest(self, role: str, task: str | None = None) -> list[Capability]:
         """Mint fresh, signed capabilities for `role` under `task`, for this turn."""
+        task = self.policy.default_task if task is None else task
         manifest: list[Capability] = []
-        for template in templates_for(task, role):
+        for template in self.policy.templates_for(task, role):
             cap = Capability(
                 tool=template["tool"],
                 scope=template["scope"],
@@ -38,7 +46,7 @@ class Supervisor:
             manifest.append(cap)
         return manifest
 
-    def issue_all(self, roles: list[str], task: str = DEFAULT_TASK) -> dict[str, list[Capability]]:
+    def issue_all(self, roles: list[str], task: str | None = None) -> dict[str, list[Capability]]:
         return {role: self.issue_manifest(role, task) for role in roles}
 
     @property

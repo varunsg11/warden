@@ -1,0 +1,48 @@
+# Warden's default policy: what each ROLE may do, per TASK.
+#
+# Least privilege by TASK (just-in-time access): authority is granted for the
+# workflow the application declared this turn, and no other. The task comes from
+# the trusted caller, never from retrieved data, so an injection can't change it.
+#
+# Validate edits with:  warden policy check src/warden/policies/default.toml
+
+default_task = "summarize"
+
+# The scope each tool's operation REQUIRES. Reading is cheap; writing moves money
+# or sends data.
+[tools]
+search_docs = "read"
+issue_refund = "write"
+send_email = "write"
+
+# --- summarize: read-only. The refund agent gets NOTHING, so an injected
+# "issue a refund" is denied at the very first check.
+[tasks.summarize]
+summarizer = []
+refund_issuer = []
+
+[[tasks.summarize.retriever]]
+tool = "search_docs"
+scope = "read"
+
+# --- process_refund: ONE refund per turn, $0.01-$50, only to known accounts.
+[tasks.process_refund]
+summarizer = []
+
+[[tasks.process_refund.retriever]]
+tool = "search_docs"
+scope = "read"
+
+[[tasks.process_refund.refund_issuer]]
+tool = "issue_refund"
+scope = "write"
+max_uses = 1
+params.amount = { min = 0.01, max = 50.0 }
+params.account = { allow = ["1234", "5678", "4321"] }
+
+# --- reply_to_customer: send_email can't be tightly param-constrained (you can't
+# allowlist every legitimate recipient), so the gate permits it broadly and the
+# DRIFT detector watches the destination domain.
+[[tasks.reply_to_customer.responder]]
+tool = "send_email"
+scope = "write"

@@ -68,7 +68,7 @@ Two independent lines. The **gate** catches calls that are *out of bounds*. The
 policy permits yet unlike anything the business has ever done, or an email to a
 never-seen domain (which the gate can't help with, because you can't allowlist every
 legitimate recipient).
-→ two stages in [`GatedToolRunner.execute`](src/warden/pipeline/runner.py); [`drift.py`](src/warden/governance/drift.py).
+→ two stages in [`GatedToolRunner.authorize`](src/warden/pipeline/runner.py); [`drift.py`](src/warden/governance/drift.py).
 
 ### Why the drift detector is statistics, not an LLM
 An LLM judge is injectable by the same prompt injection we're defending against — the
@@ -90,3 +90,25 @@ representing the real user), while the **documents** come from an untrusted, att
 influenceable source. The injection controls the data channel but not the control
 channel — so it can change what the agent *reads*, never what it's *authorized* to do.
 → the `task` argument threaded from the app through [`build_governed_pipeline`](src/warden/pipeline/graph.py).
+
+### In-envelope attacks & provenance (taint tracking)
+An envelope says which values are *allowed*. It can't say which one the *user meant*.
+If the allowlist holds accounts 1234 and 5678 and the customer on 1234 asked for a
+refund, an injection only has to steer the agent to 5678. That call passes the gate
+and looks normal to drift. The tell is **provenance**: 1234 appears in the user's
+request, and 5678 appears only in a retrieved document. Taint tracking (as in CaMeL and
+FIDES) follows data from untrusted sources to sensitive sinks. Warden approximates it
+deterministically. The session records trusted text (the request) and untrusted text
+(every tool output), and a `from = "trusted"` rule requires a sensitive argument to
+appear in trusted text. The price is utility: a value that legitimately came from a
+document is denied as well.
+→ [`provenance.py`](src/warden/governance/provenance.py), the `provenance_ok` check in [`gate.py`](src/warden/governance/gate.py).
+
+### Fail closed
+When a security check can't decide, it must deny, never allow. The gate turns any
+internal error into a DENY. The schema validator rejects constraint keywords it doesn't
+implement. A provenance rule with no provenance tracked denies. Drift flags a watched
+feature it can't read. The policy loader refuses rules the gate doesn't enforce. Each
+of these once had, or could have had, a quiet "skip" that an attacker would aim for,
+such as a NaN amount that compared False against every bound.
+→ [`gate.py`](src/warden/governance/gate.py), [`schema.py`](src/warden/governance/schema.py), [`policy_loader.py`](src/warden/governance/policy_loader.py), [`drift.py`](src/warden/governance/drift.py).

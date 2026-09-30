@@ -6,110 +6,146 @@
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://github.com/astral-sh/ruff)
 [![Types: mypy](https://img.shields.io/badge/types-mypy-blue.svg)](https://mypy-lang.org/)
 
-A capability-governed runtime that defends LLM agents against **indirect prompt
-injection**. The premise: you cannot reliably stop a model from being fooled by
-malicious text hidden in the data it reads, so you instead **constrain what a
-fooled agent is allowed to do** — with authorization enforced by deterministic
-code that sits *outside* the agent's reasoning loop.
+A capability-based defense for LLM agents against **indirect prompt injection**.
+You can't reliably stop a model from being fooled by malicious text in the data it
+reads. Warden instead **limits what a fooled agent is allowed to do**. Authorization
+is enforced by deterministic code outside the agent's reasoning loop: signed, per-task
+capabilities, a nine-check gate, and provenance tracking for sensitive arguments.
+Text can talk a model into anything, but it can't talk an `if` statement into anything.
 
-> **`warden eval` → contained 100% of indirect-injection attacks (15/15) that the
-> ungated baseline executed 0% of, with an 8% false-quarantine rate (2/26) on clean
-> traffic.** 10 caught by the capability gate, 5 by the drift detector — including
-> evasions aimed at the checks themselves (NaN amounts, negative refunds, exfil
-> addresses hidden among known recipients or behind a display name).
+**Results on [AgentDojo](https://github.com/ethz-spylab/agentdojo)** (all four suites,
+`important_instructions` attack). Full tables: [results/agentdojo](results/agentdojo/README.md).
 
-## The core idea
+| | Attack success ↓ | Utility (no attack) |
+|---|---|---|
+| Always-fooled agent, no defense | 94.9% | 99.0% |
+| … + Warden, per-task capabilities | **23.5%** | **99.0%** |
+| … + Warden, per-task + provenance | **3.8%** | 76.3% |
+
+The scripted "always-fooled" agent carries out every injection it reads. That makes
+it a worst case that measures what the policy alone contains, independent of how
+gullible a particular model is. Real-model (gpt-4o-mini) results are in the
+[results table](results/agentdojo/README.md).
+
+Also included:
+- **MCP gateway:** `warden mcp-proxy` puts the gate in front of *any* MCP tool server.
+- **Overhead:** about 1 ms per call for the full enforcement path (about 0.2% of an
+  LLM call).
+- **Tests:** 130+ deterministic tests with no network. A tamper-evident audit log.
+
+## How it works
 
 ```
 src/warden/
-  governance/   <- deterministic security. NO LLM runs here. A wall of `if`s.
-  pipeline/     <- the agents + tools. This is the half that CAN be fooled.
+  governance/   deterministic security. NO LLM runs here, ever.   (trusted)
+  pipeline/     the agents + tools, the half that CAN be fooled.   (untrusted)
+  integrations/ AgentDojo defense, MCP gateway
 ```
-
-An injected instruction can talk a language model into anything. It cannot talk an
-`if` statement into anything. So every authorization decision lives in `governance/`,
-never in a prompt.
 
 ```mermaid
 flowchart LR
-    U["user request<br/>+ trusted task"] --> SUP["Supervisor<br/>signs per-task capabilities"]
-    DOC[("knowledge base<br/>(attacker-influenceable)")] --> AG["agents<br/>(can be fooled)"]
-    SUP -->|manifests| GATE
-    AG -->|proposes tool call| GATE{"Gate<br/>8 checks"}
+    U["user request<br/>+ declared task"] --> SUP["Supervisor<br/>signs per-task capabilities"]
+    U -->|trusted text| PROV[("provenance")]
+    DOC[("tool output<br/>(attacker-influenceable)")] --> AG["agent<br/>(can be fooled)"]
+    DOC -->|untrusted text| PROV
+    SUP -->|manifest| GATE
+    PROV --> GATE
+    AG -->|proposes tool call| GATE{"Gate<br/>9 checks"}
     GATE -->|DENY| Q["quarantine<br/>+ audit"]
     GATE -->|ALLOW| DRIFT{"Drift<br/>anomaly?"}
     DRIFT -->|anomaly| Q
     DRIFT -->|normal| EXEC["execute"]
 ```
 
+The **task** comes from the trusted caller, which declares the workflow it launched.
+The **proposal** comes from the possibly fooled agent. They meet at the gate, which
+runs nine checks in order:
+
+1. **Capability present.** The role holds a capability for this tool under this task.
+   A `summarize` task grants the refund agent nothing.
+2. **Arguments well-formed.** They match the tool's JSON Schema: no NaN, no bools
+   standing in for numbers, no unexpected keys.
+3. **Signature valid.** The capability was minted by the Supervisor with Ed25519, and
+   the gate holds only the public key.
+4. **Bound to role.** The capability was issued to this role, not borrowed from
+   another.
+5. **Not expired.** It's within its TTL.
+6. **Scope.** A read capability can't authorize a write.
+7. **Params in envelope.** Min/max bounds and allowlists.
+8. **Provenance.** Values the policy marks `from = "trusted"` (recipients, accounts,
+   URLs) must appear in the user's request, not only in tool output. This check stops
+   an injection that steers the agent to a *different allowed* value.
+9. **Uses remaining.** Single-use capabilities can't be replayed.
+
+Calls that are in bounds but abnormal then go to a statistical **drift** detector (also
+no LLM). Every decision goes into a hash-chained **audit log**. See
+[CONCEPTS.md](CONCEPTS.md) for the theory tied to each file, and
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the threat model.
+
 ## Install
 
 ```bash
 python -m venv .venv
 # Windows:  .venv\Scripts\activate     macOS/Linux:  source .venv/bin/activate
-pip install -e ".[dev]"
-
-cp .env.example .env   # optional: add OPENAI_API_KEY for real-model demos
+pip install -e ".[dev]"          # add ,mcp for the MCP gateway
+cp .env.example .env             # optional: OPENAI_API_KEY for real-model demos
 ```
 
-Everything below runs offline and free with `--fake` (a deterministic model that
-simulates being fooled); drop the flag to use a real model via your `OPENAI_API_KEY`.
-
-## Quickstart
+## Quickstart (offline, no API key)
 
 ```bash
-warden baseline --fake   # no governance: the injection fires, money moves
-warden governed --fake   # same injection, blocked at the gate, session quarantined
-warden drift             # the anomaly detector catches in-policy-but-abnormal calls
-warden trace --fake      # narrated, step-by-step debug flow of one request
-warden eval              # attack-containment + false-quarantine numbers
-warden audit-verify audit/<session>.jsonl   # re-check a log's hash chain on disk
+warden baseline --fake   # no governance: the injection fires, $999.99 goes to ATTACKER-0001
+warden governed --fake   # same injection, denied at the gate, session quarantined
+warden trace --fake      # narrates one request through every stage, PASS/FAIL per check
+warden eval              # 17 attacks incl. evasions + in-envelope; shows which check stopped each
+warden drift             # the anomaly detector
+warden bench             # per-call overhead of each enforcement stage
+warden audit-verify audit/<session>.jsonl   # re-verify an audit log's hash chain on disk
 ```
 
-`warden baseline` ends with a refund of $999.99 wired to `ATTACKER-0001`.
-`warden governed` ends with that same proposal **denied before it runs**, and a
-tamper-evident audit log written to `audit/` (verify it any time with
-`warden audit-verify`).
+## Govern any MCP server
 
-**Understand the system** with `warden trace` — it walks one request through every
-stage (each agent, the gate's eight checks, drift, quarantine, audit) and prints a
-`PASS`/`FAIL` line for each check. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-for the threat model and enforcement-flow diagram, and [CONCEPTS.md](CONCEPTS.md)
-for the theory tied to each file.
+```bash
+pip install -e ".[mcp]"
+warden mcp-proxy --policy examples/mcp_bank/policy.toml --task pay_rent \
+    --trusted "Pay this month's rent of 1200 to my landlord GB29NWBK60161331926819" \
+    -- python examples/mcp_bank/server.py
+```
+
+Point your MCP host (Claude Desktop, an IDE, an agent) at that command instead of the
+server itself. The host only sees the tools the task grants. Every call is gated, using
+the upstream tool's own schema. The toy bank's poisoned statement tells the agent to
+pay an attacker's IBAN, and that call comes back as `Blocked by Warden: ... untrusted
+provenance`. See [`examples/mcp_bank`](examples/mcp_bank/).
 
 ## Use it as a library
 
-The reusable primitive is the gate. Issue a signed manifest for a role+task, then
-check every proposed tool call before you execute it:
-
 ```python
-from warden import Supervisor, Gate
+from warden import Gate, Supervisor
 from warden.governance.policy_loader import load_policy
+from warden.governance.provenance import Provenance
 
 supervisor = Supervisor(policy=load_policy("my_policy.toml"))  # omit for the bundled default
-gate = Gate(supervisor.verifier)  # holds only the public key
+gate = Gate(supervisor.verifier)                                # holds only the public key
 manifest = supervisor.issue_manifest("refund_issuer", task="process_refund")
 
-decision = gate.check(
-    role="refund_issuer",
-    tool_name="issue_refund",
-    arguments={"account": "1234", "amount": 20.0},
-    required_scope="write",
-    manifest=manifest,
-    arg_schema=None,  # optional: the tool's JSON Schema, checked before any bound
-)
+provenance = Provenance()
+provenance.add_trusted(user_request, "user request")            # what the user said
+provenance.add_untrusted(retrieved_doc, "search_docs")          # what the tools returned
 
-if decision.allowed:
-    ...  # safe to execute the tool
-else:
-    ...  # quarantine; decision.reason explains exactly why
+decision = gate.check(
+    role="refund_issuer", tool_name="issue_refund",
+    arguments={"account": "1234", "amount": 20.0}, required_scope="write",
+    manifest=manifest, arg_schema=tool_json_schema, provenance=provenance,
+)
+if not decision.allowed:
+    ...  # decision.reason says exactly which check failed and why
 ```
 
-### Policy files
+`GatedToolRunner` wraps all of this (gate → drift → audit → execute, plus provenance
+bookkeeping). The integrations under `warden.integrations` are built on it.
 
-Authority is declared in a TOML file: which tools exist and the scope each needs, and,
-per task and role, the capabilities granted. The bundled default is
-[`src/warden/policies/default.toml`](src/warden/policies/default.toml):
+### Policy files
 
 ```toml
 [tools]
@@ -118,73 +154,77 @@ issue_refund = "write"
 [[tasks.process_refund.refund_issuer]]
 tool = "issue_refund"
 scope = "write"
-max_uses = 1                                   # single-use: can't be replayed
+max_uses = 1                                        # single-use: can't be replayed
 params.amount  = { min = 0.01, max = 50.0 }
-params.account = { allow = ["1234", "5678", "4321"] }
+params.account = { allow = ["1234", "5678", "4321"], from = "trusted" }
 ```
 
-Validation is strict: an unknown key, an unenforceable rule, or a scope that could
-never pass the gate is a load-time error, never a silently ignored restriction.
+Validation is strict. An unknown key, a rule the gate doesn't enforce, or a scope that
+could never pass is a load-time error, never a silently ignored restriction. Run
+`warden policy check my_policy.toml` to validate a file and print what each role is
+granted.
+
+## Reproduce the benchmark
 
 ```bash
-warden policy check my_policy.toml   # validate + print what each task/role is granted
+py -3.12 -m venv .venv-agentdojo      # AgentDojo pins its own dependencies
+.venv-agentdojo/Scripts/python -m pip install -e ".[agentdojo]"
+.venv-agentdojo/Scripts/python experiments/agentdojo/run.py --model scripted --config all   # $0
+.venv-agentdojo/Scripts/python experiments/agentdojo/summarize.py
 ```
+
+Details, including real-model runs, the policy per suite, and the API spike notes, are
+in [experiments/agentdojo](experiments/agentdojo/README.md).
+
+## Honest caveats
+
+- **Containment is only as good as the policy.** Per-task capabilities stop attacks that
+  need a tool the task never needed. Provenance stops attacks that steer an allowed tool
+  to an attacker's value. Nothing tool-level stops an injection that only changes what
+  the agent *says*.
+- **Provenance costs utility.** A task that legitimately takes a recipient from a
+  document, such as "pay the bill in bill.txt", is denied too. On AgentDojo that drops
+  utility from 99% to 76%, mostly in the slack suite. The fix is a trusted source for
+  those values, such as a contacts service, not a weaker check.
+- **False positives** come from provenance (above) and from drift (legitimate but
+  unusual calls). The `warden eval` suite keeps two of the latter on purpose.
+- **Provenance is textual,** a deterministic approximation of taint tracking. It matches
+  values the model copies verbatim (IDs, IBANs, emails, URLs), not values it computes.
 
 ## Project layout
 
 ```
 src/warden/
-  governance/     capability · signing · policy(+loader) · issuer · gate · schema · drift · audit  (no LLM)
-  policies/       default.toml — the bundled policy
-  pipeline/       tools · agents · state · graph · runner                        (untrusted)
-  corpus/docs/    clean documents + the poisoned ticket
-  demos/          baseline · governed · drift · trace
-  evaluation/     cases · harness
-  cli.py          the `warden` command
-tests/            deterministic unit tests (no network)
-docs/             ARCHITECTURE.md
+  governance/     capability · signing · policy(+loader) · issuer · gate · schema
+                  · provenance · drift · audit                                 (no LLM)
+  policies/       default.toml
+  pipeline/       tools · agents · state · graph · runner                      (untrusted)
+  integrations/   agentdojo · mcp_proxy
+  demos/ evaluation/ bench.py cli.py
+experiments/agentdojo/   policies per suite, run.py, summarize.py
+results/agentdojo/       raw JSON + generated tables
+examples/mcp_bank/       poisoned toy MCP server + policy
+tests/                   deterministic, offline
 ```
 
 ## Development
 
 ```bash
-make check         # ruff (lint) + mypy (types) + pytest
-# or individually:
-ruff format .      # format
-ruff check .       # lint
-mypy               # type-check
-pytest --cov       # tests + coverage
-pre-commit install # run the linters on every commit
+ruff format . && ruff check . && mypy && pytest --cov   # what CI runs (plus eval + bench smoke)
+pre-commit install
 ```
 
-CI (GitHub Actions) runs the same checks on Python 3.11–3.13.
-
-## Docker
-
-```bash
-docker build -t warden .
-docker run --rm warden eval           # offline by default
-docker run --rm warden governed --fake
-```
+CI runs on Python 3.11–3.13. Pushing a `v*` tag publishes to PyPI
+([release.yml](.github/workflows/release.yml)).
 
 ## Documentation
 
-- [CONCEPTS.md](CONCEPTS.md) — the ideas (confused deputy, least privilege, ambient
-  authority, TOCTOU, …), each tied to the file that implements it.
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — threat model, enforcement-flow
-  diagram, component walkthrough, and honest limitations.
+- [CONCEPTS.md](CONCEPTS.md): confused deputy, ambient authority, least privilege,
+  TOCTOU and provenance, each tied to the file that implements it.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): threat model, components, limitations.
+- [docs/REPORT.md](docs/REPORT.md): the write-up covering design, evaluation, overhead
+  and related work.
 - [SECURITY.md](SECURITY.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [CHANGELOG.md](CHANGELOG.md)
-
-## Result & honest caveats
-
-`warden eval` contains **100%** of the attack suite versus **0%** ungated, with an
-**8%** false-quarantine rate. Two things to keep honest:
-
-- Containment is a *design guarantee for any harmful action outside the granted
-  envelope* — so it is only as strong as the least-privilege policy you write.
-- All false-positive risk lives in the **drift detector** (the gate has none) and is
-  tuned by its z-score threshold. The two false positives are legitimate-but-unusual
-  calls — exactly the traffic a human review queue exists for.
 
 ## License
 

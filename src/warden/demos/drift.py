@@ -12,8 +12,9 @@ from __future__ import annotations
 
 from warden.governance.audit import AuditLog
 from warden.governance.drift import DriftDetector, DriftViolation
-from warden.governance.gate import Gate
+from warden.governance.gate import Gate, GateViolation
 from warden.governance.issuer import Supervisor
+from warden.governance.provenance import Provenance
 from warden.llm import ToolCall
 from warden.pipeline.runner import GatedToolRunner
 from warden.pipeline.tools import REFUNDS_ISSUED, reset_world
@@ -54,18 +55,24 @@ def part_b(detector: DriftDetector) -> None:
     gate = Gate(sup.verifier)
     manifests = {"refund_issuer": sup.issue_manifest("refund_issuer", "process_refund")}
     audit = AuditLog("drift-demo")
-    runner = GatedToolRunner(gate, manifests, audit, drift=detector)
+    # The customer's request is the trusted input: it names account 1234, so the
+    # policy's provenance rule on `account` is satisfied.
+    provenance = Provenance()
+    provenance.add_trusted("Customer on account 1234 requests a refund.", "user request")
+    runner = GatedToolRunner(gate, manifests, audit, drift=detector, provenance=provenance)
 
-    # In policy: account 1234 is allowlisted and 49.99 <= 50 cap. Gate says ALLOW.
+    # In policy: account 1234 is allowlisted and user-named, 49.99 <= 50 cap. Gate: ALLOW.
     call = ToolCall(name="issue_refund", arguments={"account": "1234", "amount": 49.99})
     print(f"  Proposed: issue_refund {call.arguments}")
     try:
         runner.execute("refund_issuer", call)
         print("  Executed (no quarantine).")
     except DriftViolation as v:
-        print("  Stage 1 (gate):  ALLOW  (in policy: account allowlisted, amount <= 50)")
+        print("  Stage 1 (gate):  ALLOW  (account allowlisted and user-named, amount <= 50)")
         print(f"  Stage 2 (drift): DENY   {v}")
         print("  -> Session quarantined by drift. No refund issued.")
+    except GateViolation as v:
+        print(f"  Stage 1 (gate):  DENY   {v.decision.reason}")
     print(f"\n  Refund actually issued? {'YES (bad)' if REFUNDS_ISSUED else 'no'}")
     print(f"  Audit chain intact: {audit.verify_chain()}")
 

@@ -126,17 +126,21 @@ from warden.governance.policy_loader import load_policy
 from warden.governance.provenance import Provenance
 
 supervisor = Supervisor(policy=load_policy("my_policy.toml"))  # omit for the bundled default
-gate = Gate(supervisor.verifier)                                # holds only the public key
+gate = Gate(supervisor.verifier)  # holds only the public key
 manifest = supervisor.issue_manifest("refund_issuer", task="process_refund")
 
 provenance = Provenance()
-provenance.add_trusted(user_request, "user request")            # what the user said
-provenance.add_untrusted(retrieved_doc, "search_docs")          # what the tools returned
+provenance.add_trusted(user_request, "user request")  # what the user said
+provenance.add_untrusted(retrieved_doc, "search_docs")  # what the tools returned
 
 decision = gate.check(
-    role="refund_issuer", tool_name="issue_refund",
-    arguments={"account": "1234", "amount": 20.0}, required_scope="write",
-    manifest=manifest, arg_schema=tool_json_schema, provenance=provenance,
+    role="refund_issuer",
+    tool_name="issue_refund",
+    arguments={"account": "1234", "amount": 20.0},
+    required_scope="write",
+    manifest=manifest,
+    arg_schema=tool_json_schema,
+    provenance=provenance,
 )
 if not decision.allowed:
     ...  # decision.reason says exactly which check failed and why

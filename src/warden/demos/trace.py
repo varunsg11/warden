@@ -12,7 +12,7 @@ where each decision is made:
                   |
                [Summarizer] --(no tools)--> summary (carries the poison)
                   |
-             [Refund agent] --issue_refund?--> (GATE: 8 checks) --> DENY -> QUARANTINE
+             [Refund agent] --issue_refund?--> (GATE: 9 checks) --> DENY -> QUARANTINE
 
 Run it (offline, deterministic):
     warden trace                 # task=summarize (default)

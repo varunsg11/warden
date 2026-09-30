@@ -7,6 +7,7 @@
     warden eval                  attack-containment + false-quarantine numbers
     warden audit-verify FILE     check an audit log's hash chain on disk
     warden policy check FILE     validate a policy file and show what it grants
+    warden bench [--quick]       per-call overhead of the enforcement path
     warden mcp-proxy --policy P --task T [--trusted TEXT] -- CMD...
                                  govern an MCP tool server (needs the `mcp` extra)
 
@@ -47,6 +48,9 @@ def _build_parser() -> argparse.ArgumentParser:
     policy_sub = p.add_subparsers(dest="policy_command", required=True)
     pc = policy_sub.add_parser("check", help="validate a policy file and show what it grants")
     pc.add_argument("path", help="path to a policy .toml file")
+
+    p = sub.add_parser("bench", help="per-call overhead of the enforcement path")
+    p.add_argument("--quick", action="store_true", help="1,000 iterations instead of 10,000")
 
     p = sub.add_parser("mcp-proxy", help="govern an MCP tool server (needs the `mcp` extra)")
     p.add_argument("--policy", required=True, help="policy .toml file")
@@ -96,6 +100,10 @@ def main(argv: list[str] | None = None) -> int:
         return _policy_check(args.path)
     elif args.command == "mcp-proxy":
         return _mcp_proxy(args)
+    elif args.command == "bench":
+        from warden import bench
+
+        bench.main(quick=args.quick)
     return 0
 
 

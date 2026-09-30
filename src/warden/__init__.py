@@ -5,7 +5,7 @@ injection, so we put authorization in deterministic code OUTSIDE the agent's
 reasoning loop, where no amount of persuasive text can talk its way past it.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Convenience re-exports for library users. Kept lightweight: importing `warden`
 # pulls in the governance core but NOT langgraph (only warden.pipeline.graph does).

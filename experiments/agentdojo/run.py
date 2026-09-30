@@ -38,6 +38,7 @@ from typing import Any
 
 from agentdojo.agent_pipeline import (
     AgentPipeline,
+    BasePipelineElement,
     InitQuery,
     SystemMessage,
     ToolsExecutionLoop,
@@ -136,6 +137,37 @@ def build_policy(config: str, suite: Any, spec: dict) -> tuple[Policy, Callable[
     return policy, declare
 
 
+class RetryingLLM(BasePipelineElement):
+    """Retries the wrapped LLM element on rate limits and transient API errors,
+    with exponential backoff. A retry re-sends the identical request, so it
+    doesn't change what is measured -- it only keeps a long run alive."""
+
+    def __init__(self, llm: BasePipelineElement, attempts: int = 8) -> None:
+        self.llm = llm
+        self.name = getattr(llm, "name", None)
+        self.attempts = attempts
+
+    def query(self, *args: Any, **kwargs: Any) -> Any:
+        import openai
+
+        retryable = (
+            openai.RateLimitError,
+            openai.APIConnectionError,
+            openai.APITimeoutError,
+            openai.InternalServerError,
+        )
+        for attempt in range(self.attempts):
+            try:
+                return self.llm.query(*args, **kwargs)
+            except retryable as exc:
+                if attempt == self.attempts - 1:
+                    raise
+                delay = min(60.0, 2.0**attempt)
+                print(f"    [retry {attempt + 1}] {type(exc).__name__}; sleeping {delay:.0f}s")
+                time.sleep(delay)
+        raise AssertionError("unreachable")
+
+
 def build_pipeline(
     config: str, suite: Any, model: str, spec: dict, on_deny: str, audit_dir: Path | None
 ) -> tuple[AgentPipeline, WardenConfig | None]:
@@ -143,7 +175,7 @@ def build_pipeline(
         llm: Any = ScriptedAgent(suite, name=f"{SCRIPTED_TARGET}-scripted")
         base_name = f"{SCRIPTED_TARGET}-scripted"
     else:
-        llm = get_llm("openai", model, None, "tool")
+        llm = RetryingLLM(get_llm("openai", model, None, "tool"))
         base_name = model
 
     system = SystemMessage(load_system_message(None))
@@ -176,6 +208,16 @@ def build_pipeline(
     return pipeline, warden
 
 
+def scripted_unperformable(suite: Any) -> list[str]:
+    """Injection tasks whose ground truth has no tool calls."""
+    env = suite.load_and_inject_default_environment({})
+    return sorted(
+        tid
+        for tid, task in suite.injection_tasks.items()
+        if not task.ground_truth(env.model_copy(deep=True))
+    )
+
+
 def _mean(values: Any) -> float:
     values = list(values)
     return sum(values) / len(values) if values else float("nan")
@@ -206,12 +248,21 @@ def run_one(args: argparse.Namespace, config: str, rep: int, all_suites: dict) -
         audit_dir = logdir / "audit" if args.audit else None
         user_tasks = args.user_tasks or None
         injection_tasks = args.injection_tasks or None
+        excluded: list[str] = []
+        if args.model == "scripted":
+            # The scripted agent replays ground truth; some injection tasks have
+            # none (e.g. workspace injection_task_6-13 in v1.2, travel's text-only
+            # injection_task_6), so it can't perform them. Evaluate only the ones
+            # it can, and record the rest -- real-model runs include all of them.
+            excluded = scripted_unperformable(suite)
+            candidates = injection_tasks or list(suite.injection_tasks)
+            injection_tasks = [t for t in candidates if t not in excluded]
         print(f"\n=== {run_id} :: {suite_name}")
 
         pipeline, warden = build_pipeline(config, suite, args.model, spec, args.on_deny, audit_dir)
         with OutputLogger(str(logdir)):
             clean = benchmark_suite_without_injections(
-                pipeline, suite, logdir, True, user_tasks, BENCHMARK_VERSION
+                pipeline, suite, logdir, not args.resume, user_tasks, BENCHMARK_VERSION
             )
             clean_denials = dict(warden.denials) if warden else {}
             if warden:
@@ -222,7 +273,7 @@ def run_one(args: argparse.Namespace, config: str, rep: int, all_suites: dict) -
                 suite,
                 attack,
                 logdir,
-                True,
+                not args.resume,
                 user_tasks,
                 injection_tasks,
                 verbose=False,
@@ -240,6 +291,7 @@ def run_one(args: argparse.Namespace, config: str, rep: int, all_suites: dict) -
             "asr": _mean(attacked["security_results"].values()),
             "n_user_tasks": len(clean["utility_results"]),
             "n_pairs": len(pairs),
+            "excluded_injection_tasks": excluded,
             "denials_clean": clean_denials,
             "denials_attacked": dict(warden.denials) if warden else {},
             "clean": {u: ok for (u, _), ok in clean["utility_results"].items()},
@@ -278,6 +330,12 @@ def main() -> None:
     parser.add_argument("--user-tasks", default="", help="comma-separated subset (smoke tests)")
     parser.add_argument("--injection-tasks", default="", help="comma-separated subset")
     parser.add_argument("--audit", action="store_true", help="write a Warden audit log per episode")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="reuse episodes already logged for this run id instead of re-running them "
+        "(to continue an interrupted real-model run without paying twice)",
+    )
     args = parser.parse_args()
     args.suites = [s for s in args.suites.split(",") if s]
     args.user_tasks = [t for t in args.user_tasks.split(",") if t]

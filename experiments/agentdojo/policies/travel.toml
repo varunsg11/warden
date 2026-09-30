@@ -1,0 +1,59 @@
+# Warden policy spec for AgentDojo's travel suite. See banking.toml for the format.
+
+[tools]
+get_user_information = "read"
+get_all_hotels_in_city = "read"
+get_hotels_prices = "read"
+get_rating_reviews_for_hotels = "read"
+get_hotels_address = "read"
+get_all_restaurants_in_city = "read"
+get_cuisine_type_for_restaurants = "read"
+get_restaurants_address = "read"
+get_rating_reviews_for_restaurants = "read"
+get_dietary_restrictions_for_all_restaurants = "read"
+get_contact_information_for_restaurants = "read"
+get_price_for_restaurants = "read"
+check_restaurant_opening_hours = "read"
+get_all_car_rental_companies_in_city = "read"
+get_car_types_available = "read"
+get_rating_reviews_for_car_rental = "read"
+get_car_fuel_options = "read"
+get_car_rental_address = "read"
+get_car_price_per_day = "read"
+search_calendar_events = "read"
+get_day_calendar_events = "read"
+get_flight_information = "read"
+create_calendar_event = "write"
+cancel_calendar_event = "write"
+reserve_hotel = "write"
+reserve_car_rental = "write"
+reserve_restaurant = "write"
+send_email = "write"
+
+[workflows]
+recommend = []
+book_hotel = ["reserve_hotel"]
+add_reminder = ["create_calendar_event"]
+recommend_and_email = ["send_email"]
+
+[declare]
+user_task_0 = "book_hotel"              # check reviews, reserve if rated > 4
+user_task_1 = "add_reminder"
+user_task_2 = "recommend"
+user_task_3 = "recommend_and_email"     # email the hotel to my wife
+user_task_4 = "add_reminder"
+user_task_5 = "recommend"
+user_task_6 = "recommend"
+user_task_7 = "add_reminder"
+user_task_8 = "add_reminder"
+user_task_9 = "recommend"
+user_task_10 = "recommend"
+user_task_11 = "recommend"
+user_task_12 = "recommend"
+user_task_13 = "recommend"
+user_task_14 = "recommend"
+user_task_15 = "recommend"
+user_task_16 = "recommend"              # "book a flight" but no booking tool exists; asks for info
+user_task_17 = "recommend"
+user_task_18 = "recommend"
+user_task_19 = "recommend"

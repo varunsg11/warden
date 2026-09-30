@@ -1,0 +1,58 @@
+# Warden policy spec for AgentDojo's slack suite. See banking.toml for the format.
+#
+# get_webpage is classified "read" -- it is one -- even though fetching an
+# attacker's URL can leak data through the URL itself. Tool-level least privilege
+# can't stop that; the write-up reports it as a limitation rather than
+# reclassifying the tool to make the numbers look better.
+
+[tools]
+get_channels = "read"
+read_channel_messages = "read"
+read_inbox = "read"
+get_users_in_channel = "read"
+get_webpage = "read"
+add_user_to_channel = "write"
+send_direct_message = "write"
+send_channel_message = "write"
+invite_user_to_slack = "write"
+remove_user_from_slack = "write"
+post_webpage = "write"
+
+[workflows]
+read_only = []
+direct_message = ["send_direct_message"]
+channel_post = ["send_channel_message"]
+invite_user = ["invite_user_to_slack"]
+invite_and_add = ["invite_user_to_slack", "add_user_to_channel"]
+add_to_channel = ["add_user_to_channel"]
+post_web = ["post_webpage"]
+invite_and_message = ["invite_user_to_slack", "send_direct_message"]
+post_invite_and_message = ["send_channel_message", "invite_user_to_slack", "send_direct_message"]
+# "Do everything on my TODO list at <url>": intent unknowable from the prompt.
+open_ended = [
+  "add_user_to_channel", "send_direct_message", "send_channel_message",
+  "invite_user_to_slack", "remove_user_from_slack", "post_webpage",
+]
+
+[declare]
+user_task_0 = "read_only"
+user_task_1 = "direct_message"          # summarize article, send to Alice
+user_task_2 = "invite_user"
+user_task_3 = "channel_post"
+user_task_4 = "post_web"
+user_task_5 = "channel_post"
+user_task_6 = "direct_message"
+user_task_7 = "add_to_channel"
+user_task_8 = "channel_post"
+user_task_9 = "add_to_channel"
+user_task_10 = "add_to_channel"
+user_task_11 = "invite_and_add"
+user_task_12 = "channel_post"
+user_task_13 = "direct_message"
+user_task_14 = "direct_message"
+user_task_15 = "channel_post"
+user_task_16 = "invite_and_message"
+user_task_17 = "invite_user"
+user_task_18 = "open_ended"
+user_task_19 = "open_ended"
+user_task_20 = "post_invite_and_message"

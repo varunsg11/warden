@@ -1,0 +1,87 @@
+# Warden policy spec for AgentDojo's workspace suite. See banking.toml for the format.
+
+[tools]
+get_unread_emails = "read"
+get_sent_emails = "read"
+get_received_emails = "read"
+get_draft_emails = "read"
+search_emails = "read"
+search_contacts_by_name = "read"
+search_contacts_by_email = "read"
+get_current_day = "read"
+search_calendar_events = "read"
+get_day_calendar_events = "read"
+search_files_by_filename = "read"
+get_file_by_id = "read"
+list_files = "read"
+search_files = "read"
+send_email = "write"
+delete_email = "write"
+create_calendar_event = "write"
+cancel_calendar_event = "write"
+reschedule_calendar_event = "write"
+add_calendar_event_participants = "write"
+append_to_file = "write"
+create_file = "write"
+delete_file = "write"
+share_file = "write"
+
+[workflows]
+read_only = []
+schedule_event = ["create_calendar_event"]
+reschedule_event = ["reschedule_calendar_event"]
+add_participants = ["add_calendar_event_participants"]
+edit_file = ["append_to_file"]
+create_file = ["create_file"]
+create_and_share_file = ["create_file", "share_file"]
+delete_file = ["delete_file"]
+send_email = ["send_email"]
+# "Do whatever that email says": intent can't be known from the prompt, so the
+# app has to grant every write tool. Honest worst case for least privilege.
+open_ended = [
+  "send_email", "delete_email", "create_calendar_event", "cancel_calendar_event",
+  "reschedule_calendar_event", "add_calendar_event_participants", "append_to_file",
+  "create_file", "delete_file", "share_file",
+]
+
+[declare]
+user_task_0 = "read_only"
+user_task_1 = "read_only"
+user_task_2 = "read_only"
+user_task_3 = "read_only"
+user_task_4 = "schedule_event"          # summarize day + create lunch event
+user_task_5 = "read_only"
+user_task_6 = "schedule_event"
+user_task_7 = "reschedule_event"
+user_task_8 = "add_participants"
+user_task_9 = "schedule_event"
+user_task_10 = "read_only"
+user_task_11 = "read_only"
+user_task_12 = "schedule_event"
+user_task_13 = "open_ended"             # do the actions in David's email
+user_task_14 = "read_only"
+user_task_15 = "schedule_event"
+user_task_16 = "read_only"
+user_task_17 = "read_only"
+user_task_18 = "schedule_event"
+user_task_19 = "open_ended"             # includes "do the actions in David's email"
+user_task_20 = "schedule_event"
+user_task_21 = "schedule_event"
+user_task_22 = "read_only"
+user_task_23 = "read_only"
+user_task_24 = "read_only"
+user_task_25 = "send_email"
+user_task_26 = "read_only"
+user_task_27 = "read_only"
+user_task_28 = "read_only"
+user_task_29 = "edit_file"
+user_task_30 = "read_only"
+user_task_31 = "create_file"
+user_task_32 = "create_and_share_file"
+user_task_33 = "send_email"
+user_task_34 = "edit_file"
+user_task_35 = "delete_file"
+user_task_36 = "create_file"
+user_task_37 = "create_and_share_file"
+user_task_38 = "delete_file"
+user_task_39 = "read_only"

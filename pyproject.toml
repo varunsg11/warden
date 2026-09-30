@@ -43,6 +43,9 @@ dev = [
     "pre-commit>=3.7",
     "build>=1.2",
 ]
+# Benchmark Warden on AgentDojo (experiments/agentdojo). Use a separate venv:
+# agentdojo pins its own openai/pydantic versions.
+agentdojo = ["agentdojo==0.1.35"]
 
 [project.urls]
 Homepage = "https://github.com/varunsg11/warden"
@@ -70,6 +73,11 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
 ignore = ["E501"]  # line length handled by the formatter
+
+[tool.ruff.lint.per-file-ignores]
+# query() must match AgentDojo's BasePipelineElement signature exactly, defaults
+# included; the adapter never mutates them (extra_args is copied, not updated).
+"src/warden/integrations/agentdojo.py" = ["B006", "B008"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["warden"]
